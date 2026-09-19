@@ -6,6 +6,8 @@ This is the script to run for the portfolio result.
 Run:  PYTHONPATH=src python3 examples/04_full_optimization.py
 """
 
+import argparse
+import json
 import warnings
 
 import numpy as np
@@ -38,6 +40,11 @@ def describe(params, title):
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--save", help="write the optimised design to JSON "
+                                   "for examples/06_tier1_signoff.py")
+    args = ap.parse_args()
+
     space = MOTOR_MOUNT_SPACE
     solver = ReferenceFrameSolver(build_frame)
     bands = rpm_bands(RPM_LO, RPM_HI, orders=(1.0, 2.0, 4.0))
@@ -81,7 +88,30 @@ def main() -> None:
         ok &= worst >= obj.margin
         print(f"  {status}  {f:8.1f} Hz  ({lab:<11s})  "
               f"min separation {worst*100:6.1f}%  (required {obj.margin*100:.0f}%)")
-    print(f"\n  RESULT: {'all modes clear' if ok else 'margin not met'}")
+    print(f"\n  RESULT: {'all modes clear' if ok else 'margin not met'} (Tier 0)")
+    print("  NOTE: Tier 0 is a beam idealisation. These numbers are not")
+    print("  quotable until verified with examples/06_tier1_signoff.py.")
+
+    if args.save:
+        with open(args.save, "w") as fh:
+            json.dump(
+                {
+                    "params": result.params,
+                    "tier0_frequencies": result.frequencies.tolist(),
+                    "mass": result.mass,
+                    "objective": result.objective,
+                    "n_fea_calls": result.n_fea_calls,
+                    "baseline": {
+                        "params": base["params"],
+                        "frequencies": base["frequencies"].tolist(),
+                        "mass": base["mass"],
+                        "objective": base["objective"],
+                    },
+                },
+                fh,
+                indent=2,
+            )
+        print(f"\n  saved {args.save}")
 
 
 if __name__ == "__main__":

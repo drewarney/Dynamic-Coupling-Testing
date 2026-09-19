@@ -139,3 +139,71 @@ def test_specific_stiffness_ordering(name):
         * np.sqrt(mat.E * sec.Iy / (mat.rho * sec.A))
     )
     assert abs(f - expected) / expected < 1e-3
+
+
+def test_mass_factor_scales_inertia_only():
+    r"""``Section.mass_factor`` must move mass without touching stiffness.
+
+    A beam section sets both from one area, which is wrong when a 1D element
+    stands in for a 2D feature and overlapping members double-count material.
+    The correction must leave :math:`K` alone, so :math:`f\sqrt{\mathrm{mf}}`
+    is invariant -- if stiffness moved too, this identity would break.
+    """
+    L, mat = 1.0, MATERIALS["STEEL"]
+    ref = None
+    for mf in (0.25, 1.0, 4.0):
+        sec = Section.circle(0.02, mass_factor=mf)
+        model = _straight_beam(L, sec, mat, n_elem=20)
+        res = modal_solve(model, n_modes=2, shear=False)
+        invariant = res.frequencies[0] * np.sqrt(mf)
+        if ref is None:
+            ref = invariant
+        assert abs(invariant - ref) / ref < 1e-9, f"stiffness moved at mf={mf}"
+        expected = mat.rho * sec.A * L * mf
+        assert abs(model.structural_mass() - expected) / expected < 1e-12
+
+
+def test_plate_mass_factor_reproduces_true_plate_mass():
+    """The plate correction must be exact at every design point, not fitted.
+
+    The perimeter and spoke members overlap, so their swept volume exceeds the
+    real plate's. ``build_frame`` derives the inertia correction from the actual
+    swept volumes rather than a hard-coded constant, so this holds even though
+    the plate now overhangs the legs and carries a clamped motor bore.
+    """
+    from dynopt.doe import sobol_sample
+    from dynopt.geometry import MOTOR_MOUNT_SPACE, build_frame
+    from dynopt.geometry.motor_mount import plate_geometry
+
+    space = MOTOR_MOUNT_SPACE
+    for x in sobol_sample(space, 8, seed=11):
+        p = space.to_dict(x)
+        model = build_frame(p, motor_mass=0.0, motor_inertia=(0.0, 0.0, 0.0))
+        rho = model.material.rho
+        g = plate_geometry(p)
+        true_plate = rho * p["plate_thk"] * (
+            (2 * g["half_width"]) ** 2 - np.pi * g["hole_radius"] ** 2
+        )
+        plate_mass = sum(
+            rho * s.A * s.mass_factor * model.element_length(e)
+            for e, s in enumerate(model.sections)
+            if e >= 16  # perimeter + spoke elements follow the 4x4 leg elements
+        )
+        assert plate_mass == pytest.approx(true_plate, rel=1e-9), (
+            f"plate mass {plate_mass*1000:.3f} g != true {true_plate*1000:.3f} g"
+        )
+
+
+def test_leg_section_matches_declared_hollowness():
+    """Legs must be solid exactly when the design implies a sub-minimum bore."""
+    from dynopt.doe import sobol_sample
+    from dynopt.geometry import MOTOR_MOUNT_SPACE, build_frame
+    from dynopt.geometry.motor_mount import leg_bore_radius
+
+    space = MOTOR_MOUNT_SPACE
+    for x in sobol_sample(space, 10, seed=21):
+        p = space.to_dict(x)
+        bore = leg_bore_radius(p["leg_dia"], p["leg_thk"])
+        area = build_frame(p).sections[0].A
+        expected = np.pi * ((p["leg_dia"] / 2) ** 2 - bore**2)
+        assert area == pytest.approx(expected, rel=1e-9)

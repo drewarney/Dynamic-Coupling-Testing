@@ -60,45 +60,56 @@ class Section:
     J: float
     Ip: float | None = None
     kappa: float = 5.0 / 6.0  # Timoshenko shear coefficient
+    #: Multiplier on the element's *inertia* only, leaving stiffness untouched.
+    #:
+    #: A beam section sets mass and stiffness from one area, which is wrong
+    #: whenever a 1D element stands in for a 2D feature: overlapping members
+    #: that share material double-count it. Equivalent to a negative
+    #: non-structural mass on a NASTRAN PBEAM, and the only correct way to fix
+    #: an idealisation's mass without softening it.
+    mass_factor: float = 1.0
 
     def __post_init__(self) -> None:
         if self.Ip is None:
             self.Ip = self.Iy + self.Iz
 
     @classmethod
-    def rectangle(cls, b: float, h: float) -> "Section":
+    def rectangle(cls, b: float, h: float, mass_factor: float = 1.0) -> "Section":
         """Solid rectangle, ``b`` wide (local y) by ``h`` deep (local z)."""
         a, c = max(b, h) / 2.0, min(b, h) / 2.0
         # Roark's approximation for the torsion constant of a solid rectangle.
         J = a * c**3 * (16.0 / 3.0 - 3.36 * (c / a) * (1.0 - c**4 / (12.0 * a**4)))
-        return cls(A=b * h, Iy=b * h**3 / 12.0, Iz=h * b**3 / 12.0, J=J)
+        return cls(A=b * h, Iy=b * h**3 / 12.0, Iz=h * b**3 / 12.0, J=J,
+                   mass_factor=mass_factor)
 
     @classmethod
-    def circle(cls, d: float) -> "Section":
+    def circle(cls, d: float, mass_factor: float = 1.0) -> "Section":
         I = np.pi * d**4 / 64.0
-        return cls(A=np.pi * d**2 / 4.0, Iy=I, Iz=I, J=2 * I, Ip=2 * I, kappa=0.9)
+        return cls(A=np.pi * d**2 / 4.0, Iy=I, Iz=I, J=2 * I, Ip=2 * I, kappa=0.9,
+                   mass_factor=mass_factor)
 
     @classmethod
-    def tube(cls, d_out: float, t: float) -> "Section":
+    def tube(cls, d_out: float, t: float, mass_factor: float = 1.0) -> "Section":
         """Thin/thick-walled circular tube -- the drone-arm workhorse section."""
         d_in = max(d_out - 2.0 * t, 0.0)
         I = np.pi * (d_out**4 - d_in**4) / 64.0
         A = np.pi * (d_out**2 - d_in**2) / 4.0
-        return cls(A=A, Iy=I, Iz=I, J=2 * I, Ip=2 * I, kappa=0.53)
+        return cls(A=A, Iy=I, Iz=I, J=2 * I, Ip=2 * I, kappa=0.53,
+                   mass_factor=mass_factor)
 
     @classmethod
-    def box(cls, b: float, h: float, t: float) -> "Section":
+    def box(cls, b: float, h: float, t: float, mass_factor: float = 1.0) -> "Section":
         """Rectangular hollow section (thin wall), b x h outer, wall t."""
         bi, hi = b - 2 * t, h - 2 * t
         if bi <= 0 or hi <= 0:
-            return cls.rectangle(b, h)
+            return cls.rectangle(b, h, mass_factor=mass_factor)
         A = b * h - bi * hi
         Iy = (b * h**3 - bi * hi**3) / 12.0
         Iz = (h * b**3 - hi * bi**3) / 12.0
         # Bredt-Batho for a closed thin-walled section.
         am, bm = b - t, h - t
         J = 2.0 * t * (am * bm) ** 2 / (am + bm)
-        return cls(A=A, Iy=Iy, Iz=Iz, J=J, Ip=Iy + Iz)
+        return cls(A=A, Iy=Iy, Iz=Iz, J=J, Ip=Iy + Iz, mass_factor=mass_factor)
 
 
 @dataclass
@@ -159,7 +170,7 @@ class FrameModel:
         """Mass of the beams only (point masses are non-structural payload)."""
         return float(
             sum(
-                self.material.rho * s.A * self.element_length(e)
+                self.material.rho * s.A * s.mass_factor * self.element_length(e)
                 for e, s in enumerate(self.sections)
             )
         )
@@ -259,7 +270,9 @@ def element_matrices(
     k[np.ix_(idx, idx)] += kb
 
     # --- consistent mass -----------------------------------------------------
+    # mass_factor scales inertia only; the stiffness block above is untouched.
     m = np.zeros((12, 12))
+    rho = rho * sec.mass_factor
     ma = rho * A * L / 6.0
     for a, b in ((0, 6), (3, 9)):
         scale = ma if a == 0 else rho * Ip * L / 6.0

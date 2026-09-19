@@ -169,6 +169,38 @@ mapdl.antype("STATIC"); mapdl.pstres("ON"); mapdl.solve()
 mapdl.antype("MODAL");  mapdl.pstres("ON"); mapdl.solve()
 ```
 
+## 1.4 Tier 1 hardening: what actually breaks
+
+The Tier 1 path was written before it was ever executed. Running it against
+Tier 0 found six defects, and **every one produced a confident wrong answer
+rather than an error**. That is the defining hazard of automated FEA: the
+toolchain is happy to mesh and solve nonsense.
+
+| Defect | Symptom | Why it is silent |
+|---|---|---|
+| Legs extruded then rotated dipped below z=0 | Face selector clamped 4 leg tips | Solve succeeds, BCs are just wrong |
+| Legs met the plate face without penetrating | STEP held 5 disjoint volumes | OCC finds no intersection for touching solids; `union` returns a compound |
+| Corner fillet scaled with the plate | Disjoint volumes again, but only on *large* designs | Default design passed; 3 of 6 sampled designs failed |
+| Fixed 28 mm bore vs parametric span | Self-intersecting solid, mesh aborts | Only below ~55 mm span |
+| `ELSET=EALL` in the deck | ccx aborts | Gmsh never emits `EALL`; empty `.dat` still passed an existence check |
+| Gmsh 1D/2D elements passed through | Spurious modes or abort | A 3D mesh file legitimately contains `T3D3` and `CPS6` |
+
+Three rules follow, and they generalise well beyond this part:
+
+1. **A disconnected model announces itself as rigid-body modes.** Any
+   zero-frequency mode in a constrained model means part of the structure is
+   attached to nothing. Assert on it — never eyeball the frequency list.
+2. **Validate geometry across the design space, not at the default point.** An
+   optimiser spends all its time away from your default. Checking "exactly one
+   solid volume, flat face at the mounting plane" over a Sobol sample costs
+   seconds and catches the entire class.
+3. **Touching is not joining.** CAD booleans on tangent solids silently fail.
+   Make mating features *overlap*, then trim — and verify the volume count.
+
+`tests/test_tier1_calculix_integration.py` encodes all of it. It runs the real
+toolchain (CadQuery -> Gmsh -> CalculiX); unit tests on the beam tier cannot
+catch any of these.
+
 ## 1.4 Licensing — decide this before you write a business plan
 
 | Component | Licence | Commercial use |

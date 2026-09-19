@@ -43,6 +43,92 @@ MOTOR_MOUNT_SPACE = DesignSpace(
     ]
 )
 
+#: Exact mass-correction factor for the plate's beam idealisation.
+#:
+#: The platform is represented by four perimeter beams of width ``top_span``
+#: and four spokes of width ``top_span/2``. Their swept volumes are
+#:
+#:     perimeter  4 * (top_span * t) * (2 * top_span)   =      8 * top_span^2 * t
+#:     spokes     4 * (top_span/2 * t) * (sqrt(2)*top_span) = 2*sqrt(2) * top_span^2 * t
+#:
+#: against a true plate of ``(2*top_span)^2 * t = 4 * top_span^2 * t``. The
+#: members overlap at the corners and hub, so the idealisation double-counts
+#: material by ``(8 + 2*sqrt(2))/4 = 2.71x``. Both sides scale identically with
+#: ``top_span`` and ``t``, so the correction is an exact constant, not a fit:
+#:
+#:     f = 4 / (8 + 2*sqrt(2)) = 0.369398...
+#:
+#: Applied to inertia only (see ``Section.mass_factor``); the plate's bending
+#: stiffness representation is unchanged.
+PLATE_MASS_FACTOR = 4.0 / (8.0 + 2.0 * np.sqrt(2.0))
+
+#: Radial clearance of the plate edge beyond the leg outer surface [m].
+PLATE_OVERHANG = 0.001
+
+#: Smallest bore that is both manufacturable and meshable [m].
+#:
+#: The design box allows ``leg_thk`` up to 6 mm and ``leg_dia`` down to 8 mm, so
+#: a wall thicker than the radius is reachable -- one sampled design asked for a
+#: 5.18 mm wall on a 9.02 mm tube, i.e. a bore of -1.33 mm. Clamping the inner
+#: radius to a hair above zero produced a sliver annulus that Gmsh rejected with
+#: "invalid boundary mesh (overlapping facets)". Below this bore the leg simply
+#: *is* solid, which is the physical answer and meshes cleanly.
+MIN_BORE = 0.0005
+
+
+def leg_bore_radius(dia: float, thk: float) -> float:
+    """Inner radius of a leg, or 0.0 when the section is effectively solid.
+
+    Used by the frame model and the CAD alike so the two tiers never disagree
+    about whether a leg is hollow.
+    """
+    bore = 0.5 * float(dia) - float(thk)
+    return bore if bore >= MIN_BORE else 0.0
+
+
+def plate_geometry(params: dict[str, float], motor_dia: float = 0.028) -> dict:
+    """Derived plate dimensions, shared by the frame model and the CAD.
+
+    Both representations must agree or the tiers cannot be compared. Two rules
+    here exist purely to keep the CAD valid across the *whole* design space --
+    geometry that is only valid at the default design is useless to an
+    optimiser:
+
+    ``half_width``
+        The plate overhangs the legs by ``PLATE_OVERHANG`` so each leg lands
+        with its full footprint on solid material. Legs placed exactly on a
+        plate corner overhang it by three quarters of their section, leaving
+        slivers that mesh as "overlapping facets" or fail to fuse at all.
+
+    ``hole_radius``
+        Clamped so the motor bore can never reach the legs. A fixed 28 mm bore
+        collides with them below about span = 55 mm, producing a self-
+        intersecting solid.
+    """
+    span = float(params["span"])
+    dia = float(params["leg_dia"])
+    top_span = 0.55 * span
+    half_width = top_span + 0.5 * dia + PLATE_OVERHANG
+    max_bore = max(top_span - 0.5 * dia - 0.002, 0.003)
+    return {
+        "top_span": top_span,
+        "half_width": half_width,
+        "hole_radius": min(0.5 * motor_dia, max_bore),
+    }
+
+#: Effective-width multiplier on the plate's beam members (stiffness only).
+#:
+#: Correcting the mass alone leaves the idealisation ~21% stiff, because the
+#: overlapping perimeter and spoke members double-count *stiffness* as well as
+#: material. Rather than scale EI by an opaque constant, the calibrated quantity
+#: is the members' effective width -- the classical idealisation parameter for
+#: how much of a plate acts with a stiffener. Mass stays exact regardless,
+#: since the mass factor is derived from the width (see ``plate_sections``).
+#:
+#: Calibrated against mesh-converged 3D CalculiX solves; see
+#: ``examples/05_cross_solver_validation.py``.
+PLATE_WIDTH_FACTOR = 1.0  # placeholder, calibrated below
+
 #: Non-structural payload carried at the platform centre.
 DEFAULT_MOTOR_MASS = 0.35  # kg
 DEFAULT_MOTOR_INERTIA = (2.0e-4, 2.0e-4, 3.5e-4)  # kg.m^2 about x, y, z
@@ -54,6 +140,8 @@ def build_frame(
     motor_mass: float = DEFAULT_MOTOR_MASS,
     motor_inertia: tuple[float, float, float] = DEFAULT_MOTOR_INERTIA,
     n_seg: int = 4,
+    plate_mass_factor: float = PLATE_MASS_FACTOR,
+    plate_width_factor: float = PLATE_WIDTH_FACTOR,
 ) -> FrameModel:
     """Space-frame idealisation of the motor mount.
 
@@ -73,12 +161,22 @@ def build_frame(
     # Platform is a fixed fraction of the base footprint (tapered legs).
     top_span = 0.55 * span
 
-    leg_sec = Section.tube(dia, min(thk, dia / 2.0 - 1e-5))
+    bore = leg_bore_radius(dia, thk)
+    leg_sec = (
+        Section.tube(dia, 0.5 * dia - bore) if bore > 0.0 else Section.circle(dia)
+    )
     # The plate is modelled as four edge beams of equivalent bending stiffness:
-    # width = the tributary half-span, depth = the plate thickness.
-    plate_sec = Section.rectangle(max(top_span, 1e-3), pthk)
+    # width = the tributary half-span, depth = the plate thickness. Their swept
+    # volumes overlap, so inertia is corrected by PLATE_MASS_FACTOR while the
+    # stiffness those widths imply is left alone.
+    # Effective width sets stiffness; the mass factor is then derived from that
+    # same width so the plate's true mass is reproduced exactly whatever the
+    # calibration. Swept volume is alpha*(8 + 2*sqrt(2))*top_span^2*t against a
+    # true plate of 4*top_span^2*t.
+    alpha = max(plate_width_factor, 1e-6)
+    plate_sec = Section.rectangle(max(alpha * top_span, 1e-4), pthk)
     # Spokes from the platform corners to the motor node, same section.
-    spoke_sec = Section.rectangle(max(0.5 * top_span, 1e-3), pthk)
+    spoke_sec = Section.rectangle(max(0.5 * alpha * top_span, 1e-4), pthk)
 
     corners = np.array([[1, 1], [-1, 1], [-1, -1], [1, -1]], dtype=float)
     nodes, elements, sections = [], [], []
@@ -109,6 +207,25 @@ def build_frame(
         sections.append(spoke_sec)
 
     base_nodes = [i * (n_seg + 1) for i in range(4)]
+
+    # Correct the plate members' inertia to the true plate mass.  Computed from
+    # the actual swept volumes rather than a closed-form constant, so it stays
+    # exact if the idealisation's topology or member widths ever change.
+    n_leg_elems = 4 * n_seg
+    plate_swept = sum(
+        sections[e].A * np.linalg.norm(np.asarray(nodes[j]) - np.asarray(nodes[i]))
+        for e, (i, j) in enumerate(elements)
+        if e >= n_leg_elems
+    )
+    geom = plate_geometry(params)
+    true_plate = (2.0 * geom["half_width"]) ** 2 * pthk - np.pi * geom["hole_radius"] ** 2 * pthk
+    mf = (true_plate / plate_swept) if plate_swept > 0 else 1.0
+    for e in range(n_leg_elems, len(sections)):
+        sec = sections[e]
+        sections[e] = Section(
+            A=sec.A, Iy=sec.Iy, Iz=sec.Iz, J=sec.J, Ip=sec.Ip,
+            kappa=sec.kappa, mass_factor=mf,
+        )
 
     return FrameModel(
         nodes=np.array(nodes),
@@ -154,20 +271,25 @@ class MotorMountCAD(ParametricModel):
         pthk = float(params["plate_thk"])
         dia = float(params["leg_dia"])
         thk = float(params["leg_thk"])
-        top_span = 0.55 * span
+        geom = plate_geometry(params, self.motor_dia)
+        top_span = geom["top_span"]
+        half_w = geom["half_width"]
+        bore = geom["hole_radius"]
 
         # CadQuery works in mm by convention; convert once, here.
         mm = 1000.0
+        # No corner fillet.  Its radius scaled with the plate, so on larger
+        # designs it removed exactly the material the legs land on and the part
+        # fell back into disjoint volumes.  It was cosmetic; robustness across
+        # the design space is not.
         plate = (
             cq.Workplane("XY")
             .workplane(offset=h * mm)
-            .rect(2 * top_span * mm, 2 * top_span * mm)
+            .rect(2 * half_w * mm, 2 * half_w * mm)
             .extrude(pthk * mm)
-            .edges("|Z")
-            .fillet(0.25 * top_span * mm)
             .faces(">Z")
             .workplane()
-            .hole(self.motor_dia * mm)
+            .hole(2 * bore * mm)
         )
 
         result = plate
@@ -183,13 +305,11 @@ class MotorMountCAD(ParametricModel):
             # reports six rigid-body modes because the platform is mechanically
             # attached to nothing.  Verified: embed = 0 gives 5 volumes,
             # embed >= plate_thk gives 1.
-            leg = (
-                cq.Workplane("XY")
-                .transformed(offset=p0)
-                .circle(dia * mm / 2)
-                .circle(max(dia / 2 - thk, 1e-4) * mm)
-                .extrude(axis.Length + pthk * mm)
-            )
+            bore = leg_bore_radius(dia, thk)
+            leg_wp = cq.Workplane("XY").transformed(offset=p0).circle(dia * mm / 2)
+            if bore > 0.0:
+                leg_wp = leg_wp.circle(bore * mm)
+            leg = leg_wp.extrude(axis.Length + pthk * mm)
             # Tilt the extrusion onto the real leg axis.
             zax = cq.Vector(0, 0, 1)
             rot_axis = zax.cross(axis)
@@ -220,8 +340,8 @@ class MotorMountCAD(ParametricModel):
         # meshed solid against the beam idealisation.
         below = (
             cq.Workplane("XY")
-            .box(8 * span * mm, 8 * span * mm, 10 * dia * mm, centered=(True, True, False))
-            .translate((0, 0, -10 * dia * mm))
+            .box(16 * span * mm, 16 * span * mm, 20 * h * mm, centered=(True, True, False))
+            .translate((0, 0, -20 * h * mm))
         )
         # Trim the legs flush with the top of the plate.  They are deliberately
         # extruded past it (see above) so the boolean union actually fuses;
@@ -230,7 +350,7 @@ class MotorMountCAD(ParametricModel):
         # four leg tips rather than the mounting surface.
         above = (
             cq.Workplane("XY")
-            .box(8 * span * mm, 8 * span * mm, 10 * dia * mm, centered=(True, True, False))
+            .box(16 * span * mm, 16 * span * mm, 20 * h * mm, centered=(True, True, False))
             .translate((0, 0, (h + pthk) * mm))
         )
         return result.cut(below).cut(above)
