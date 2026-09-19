@@ -32,17 +32,19 @@ smallest problem that is still *genuinely hard*:
 
 ## 4.2 Baseline: why this design fails
 
-**Tier 1 (3D solid, mesh-converged):** 502.9 g, first mode 423.9 Hz.
+**Tier 1 (3D solid, mesh-converged to −0.02%):** 502.9 g, first mode 423.7 Hz.
 
 | mode | freq | min separation | required | inside a band? |
 |---|---|---|---|---|
-| 1 | 423.9 Hz | **6.0%** | 25% | no |
-| 2 | 572.1 Hz | 43.0% | 25% | no |
-| 3 | 573.1 Hz | 43.3% | 25% | no |
-| 4 | 994.7 Hz | 148.7% | 25% | no |
+| 1 | 423.7 Hz | **5.9%** | 25% | no |
+| 2 | 570.1 Hz | 42.5% | 25% | no |
+| 3 | 570.5 Hz | 42.6% | 25% | no |
+| 4 | 996.1 Hz | 149.0% | 25% | no |
+| 5 | 1001.8 Hz | 150.4% | 25% | no |
+| 6 | 1544.7 Hz | 286.2% | 25% | no |
 
 The baseline **fails the margin requirement without actually resonating.** Its
-first mode sits 6.0% above the 4X band top (400 Hz at 6,000 RPM) — no mode lies
+first mode sits 5.9% above the 4X band top (400 Hz at 6,000 RPM) — no mode lies
 inside any excitation band. Six percent is not engineering margin: a tolerance
 stack, a temperature change or a bolt-preload shift moves it in. Rotating
 assemblies are specified at 20–25% for exactly this reason.
@@ -50,7 +52,7 @@ assemblies are specified at 20–25% for exactly this reason.
 > **Correction.** An earlier version of this document reported a 4X Campbell
 > crossing at 3,636 RPM and described the baseline as resonating mid-range.
 > That was a Tier 0 artifact: the beam tier put the first mode at 242.4 Hz,
-> which *does* cross 4X. The 3D solver puts it at 423.9 Hz, which does not.
+> which *does* cross 4X. The 3D solver puts it at 423.7 Hz, which does not.
 > The baseline is marginal, not resonant. The engineering conclusion —
 > this design needs fixing — is unchanged; the reason is different.
 
@@ -61,43 +63,54 @@ python examples/04_full_optimization.py --save optimum.json   # Tier 0, explores
 python examples/06_tier1_signoff.py optimum.json              # Tier 1, verifies
 ```
 
-**Quotable figures, 3D solid solver, mesh-converged to −0.51%:**
+**Quotable figures, 3D solid solver, straight-sided quadratic tets,
+mesh-converged to ±0.02%:**
 
 | | Baseline | Optimised | Change |
 |---|---|---|---|
 | Mass | 502.9 g | **420.4 g** | **−16.4%** |
 | Structural mass | 152.9 g | 70.4 g | −54.0% |
-| f₁ | 423.9 Hz | **1198.2 Hz** | **+182.7%** |
-| Min band separation | 6.0% *(fail)* | **199.6%** | requirement 25% |
+| f₁ | 423.7 Hz | **1191.5 Hz** | **+181.2%** |
+| Min band separation | 5.9% *(fail)* | **197.9%** | requirement 25% |
 
 Per-mode verification on the 3D solver:
 
 | mode | freq | separation | status |
 |---|---|---|---|
-| 1 | 1198.2 Hz | 199.6% | PASS |
-| 2 | 1201.2 Hz | 200.3% | PASS |
-| 3 | 1830.5 Hz | 357.6% | PASS |
-| 4 | 1933.5 Hz | 383.4% | PASS |
-| 5 | 3115.1 Hz | 678.8% | PASS |
-| 6 | 3159.8 Hz | 690.0% | PASS |
+| 1 | 1191.5 Hz | 197.9% | PASS |
+| 2 | 1191.8 Hz | 198.0% | PASS |
+| 3 | 1812.2 Hz | 353.1% | PASS |
+| 4 | 1933.2 Hz | 383.3% | PASS |
+| 5 | 3129.3 Hz | 682.3% | PASS |
+| 6 | 3137.0 Hz | 684.3% | PASS |
 
 **Lighter *and* dramatically safer** — the objectives were not truly in conflict
 once the geometry could redistribute material.
 
 ### Mesh convergence
 
+Optimised design:
+
 | h | nodes | f₁ | Δ |
 |---|---|---|---|
-| 4.0 mm | 15,144 | 1211.4 Hz | — |
-| 3.0 mm | 24,450 | 1204.4 Hz | −0.58% |
-| 2.4 mm | 36,943 | 1198.2 Hz | −0.51% |
+| 3.0 mm | 24,450 | 1192.0 Hz | — |
+| 2.4 mm | 36,943 | 1191.4 Hz | −0.05% |
+| 1.9 mm | 57,364 | 1191.5 Hz | +0.01% |
+
+Baseline:
+
+| h | nodes | f₁ | Δ |
+|---|---|---|---|
+| 3.0 mm | 47,891 | 424.3 Hz | — |
+| 2.4 mm | 71,775 | 423.8 Hz | −0.12% |
+| 1.9 mm | 111,347 | 423.7 Hz | −0.02% |
 
 ### Cost
 
 | Metric | Value |
 |---|---|
 | Tier 0 evaluations (exploration) | 64 |
-| Tier 1 solves (verification) | 4 |
+| Tier 1 solves (verification) | 6 |
 | Tier 0 wall time | 93 s |
 | Tier 1 wall time | ~3 min |
 
@@ -123,7 +136,7 @@ independently identified as the dominant lever.
 
 > **The optimum sits outside Tier 0's validated envelope** (L/d = 4.00 against a
 > 4.5 floor), which is why the 3D sign-off is mandatory rather than advisory.
-> Tier 0 under-predicted its first mode by 31.6%.
+> Tier 0 under-predicted its first mode by 31.2%.
 
 ## 4.4 Physical validation protocol
 

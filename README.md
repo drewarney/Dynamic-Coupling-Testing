@@ -7,19 +7,19 @@ geometry to move resonances out of an excitation band while minimising mass.
 **Benchmark: a 4-leg motor mount for a 350 g BLDC motor running 1,000–6,000 RPM.**
 
 All figures below are from the **3D solid solver** (Gmsh + CalculiX, quadratic
-tets, mesh-converged to −0.51%). The beam tier is used for exploration only;
+tets, straight-sided, mesh-converged to ±0.02%). The beam tier is used for exploration only;
 see [Two tiers, and why the table is 3D](#two-tiers-and-why-the-table-is-3d).
 
 | | Baseline | Optimised | Change |
 |---|---|---|---|
 | Mass | 502.9 g | **420.4 g** | **−16.4%** |
-| Lowest natural frequency | 423.9 Hz | **1198.2 Hz** | **+182.7%** |
-| Minimum band separation | 6.0% *(fails)* | **199.6%** | requirement: 25% |
+| Lowest natural frequency | 423.7 Hz | **1191.5 Hz** | **+181.2%** |
+| Minimum band separation | 5.9% *(fails)* | **197.9%** | requirement: 25% |
 
-The baseline's first mode sits 6.0% above the 4X excitation band — it does not
+The baseline's first mode sits 5.9% above the 4X excitation band — it does not
 resonate, but it has nowhere near the 25% separation a rotating assembly needs,
 so any tolerance stack or thermal shift pushes it in. The optimised design is
-**16.4% lighter and clears every band by ≥199%**, because the two objectives
+**16.4% lighter and clears every band by ≥197.9%**, because the two objectives
 stopped conflicting once material was free to redistribute.
 
 Cost: **64 beam-tier evaluations** to explore, **4 3D solves** to verify.
@@ -33,8 +33,8 @@ points, its error is design-dependent with **both signs**, from −27.1% to
 
 | | Tier 0 (beam) | Tier 1 (3D solid) | Tier 0 error |
 |---|---|---|---|
-| Optimised f₁ | 819.8 Hz | 1198.2 Hz | **−31.6%** |
-| Baseline f₁ | 244.6 Hz | 423.9 Hz | −42.3% |
+| Optimised f₁ | 819.8 Hz | 1191.5 Hz | **−31.2%** |
+| Baseline f₁ | 244.6 Hz | 423.7 Hz | −42.3% |
 
 Two physical causes, both measured: leg slenderness (error correlates with
 `leg_thk` at r = −0.874; below L/d ≈ 4.5 beam theory stops representing a
