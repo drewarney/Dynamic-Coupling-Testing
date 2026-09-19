@@ -108,10 +108,15 @@ dampers — bushings, bolted joints, bearing films — which are not proportiona
 | Damping model | max $\kappa_{ij}$ | Interpretation |
 |---|---|---|
 | Rayleigh $C = \alpha M + \beta K$ | $4\times10^{-13}$ | decoupled to machine precision ✓ |
-| Discrete dashpots at the payload | 1.00 | strongly coupled |
+| Discrete dashpots at the payload | 0.70 | strongly coupled |
 
-**Ignoring cross-modal coupling understates band-limited RMS response by 17.8%**
-on the benchmark part.
+**Ignoring cross-modal coupling understates band-limited RMS response by 29.9%**
+(and peak response by 49.4%) on the benchmark part.
+
+This number is basis-invariant by construction. Getting it right required
+canonicalising the eigenbasis inside degenerate subspaces first — without that
+step the same code returns anywhere from −1.5% to −29.9% depending on which
+LAPACK build ran it. See [`docs/01_THEORY.md`](docs/01_THEORY.md) §2.4.
 
 ---
 

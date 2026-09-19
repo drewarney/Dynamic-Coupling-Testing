@@ -42,7 +42,9 @@ names a specific technique.
 > **Cross-Modal Coupling Analysis** — Implemented programmatic non-proportional
 > damping analysis (Φᵀ C Φ projection, energy-transfer indexing) demonstrating
 > that the standard uncoupled-mode assumption understates band-limited RMS
-> response by 17.8% for discretely damped assemblies.
+> response by 29.9% for discretely damped assemblies; identified and fixed a
+> degenerate-eigenspace basis dependence that made the result vary by 28
+> percentage points across platforms.
 
 > **FEA Verification & Validation** — Developed a dependency-free 3D Timoshenko
 > frame solver validated against closed-form Euler–Bernoulli, fixed–fixed,

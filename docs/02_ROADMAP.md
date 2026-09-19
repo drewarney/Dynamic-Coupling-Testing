@@ -88,7 +88,13 @@ Expect: Rayleigh $\kappa \approx 10^{-13}$ (decoupled, as theory says),
 discrete dampers $\kappa \approx 1.0$, and a quantified FRF difference.
 
 Benchmark result: **ignoring cross-modal coupling understates band RMS
-response by 17.8%.** That one sentence is the core of your project report.
+response by 29.9%, and peak response by 49.4%.** That one sentence is the core
+of your project report.
+
+**Before you quote any coupling number, check it is basis-invariant.** Re-run
+with the degenerate mode shapes rotated within their own eigenspace (still a
+valid eigensolution). If the answer moves, you are measuring your LAPACK build,
+not your structure — see `tests/test_dynamics.py::test_uncoupled_frf_is_basis_invariant`.
 
 ### Failure modes
 - **Assuming modal damping.** `zeta=0.02` everywhere hides exactly the effect

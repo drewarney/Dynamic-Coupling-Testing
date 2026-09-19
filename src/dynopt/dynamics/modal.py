@@ -438,3 +438,69 @@ def family_frequencies(
             if key in out and b < len(vals):
                 out[key] = vals[b]
     return out
+
+
+def canonicalize_degenerate_basis(res: ModalResult, C, rtol: float = 0.02) -> ModalResult:
+    r"""Fix the arbitrary eigenbasis inside repeated-eigenvalue subspaces.
+
+    **Why this is necessary.** Eigenvectors of a repeated eigenvalue are defined
+    only up to an arbitrary orthonormal rotation within their eigenspace, and
+    different LAPACK builds return different rotations for the same input
+    (macOS Accelerate and Linux OpenBLAS demonstrably disagree). Any quantity
+    computed from the *individual* vectors of a degenerate set is therefore not
+    a physical quantity at all.
+
+    That invalidates the two most natural things to ask about modal coupling:
+
+    * :math:`\kappa_{ij}` between two degenerate modes is whatever the rotation
+      happened to make it -- reporting "modes 2 and 3 are coupled, eta = 1.0"
+      for a degenerate pair is an artifact, not physics.
+    * Zeroing the off-diagonals of :math:`\tilde{C}` -- the textbook uncoupled
+      SDOF approximation -- is not invariant under that rotation. Measured on
+      the benchmark mount, the "error from ignoring coupling" swings between
+      -1.5% and -29.9% across valid bases of the same eigensolution.
+
+    **The fix.** Within each degenerate cluster, exactly one rotation
+    diagonalises the damping block restricted to that subspace. Pick it. Since
+    every rotation in the subspace is a valid eigenbasis, this costs nothing and
+    is uniquely determined:
+
+    .. math:: \tilde{C}_{\mathcal{D}\mathcal{D}} = V \Lambda V^T,
+              \qquad \Phi_{\mathcal{D}} \leftarrow \Phi_{\mathcal{D}} V
+
+    Afterwards "ignore the off-diagonal terms" is a well-posed operation, the
+    residual off-diagonals represent genuine coupling between *distinct*
+    frequencies, and results are reproducible across machines.
+
+    Returns a shallow copy with rotated ``modes``; the input is not mutated.
+    """
+    import copy
+
+    if res.modes is None or res.M is None:
+        return res
+
+    Ct = modal_damping_matrix_raw(res, C)
+    phi = res.modes.copy()
+    for cl in cluster_modes(res.frequencies, rtol=rtol):
+        if len(cl) < 2:
+            continue
+        blk = Ct[np.ix_(cl, cl)]
+        _, V = np.linalg.eigh(0.5 * (blk + blk.T))   # symmetric => orthogonal V
+        phi[:, cl] = phi[:, cl] @ V
+
+    out = copy.copy(res)
+    out.modes = phi
+    return out
+
+
+def modal_damping_matrix_raw(res: ModalResult, C) -> np.ndarray:
+    r"""Raw projection :math:`\Phi^T C \Phi` with no basis canonicalisation.
+
+    Separated out so :func:`canonicalize_degenerate_basis` can call it without
+    recursing. Prefer :func:`dynopt.dynamics.coupling.modal_damping_matrix`,
+    which canonicalises first.
+    """
+    if res.modes is None or res.M is None:
+        raise ValueError("need modes and M")
+    phi = mass_normalize(res.modes, res.M)
+    return phi.T @ _as_array(C) @ phi

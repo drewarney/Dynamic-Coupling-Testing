@@ -5,6 +5,7 @@ import pytest
 
 from dynopt.dynamics import (
     MODE_FAMILIES,
+    canonicalize_degenerate_basis,
     classify_modes,
     cluster_modes,
     coupling_index,
@@ -167,3 +168,136 @@ def test_coupling_changes_frf():
     Hc = modal_frf(res, C, freqs, F, dofs_out=[node * 6 + 0], keep_coupling=True)[0]
     Hu = modal_frf(res, C, freqs, F, dofs_out=[node * 6 + 0], keep_coupling=False)[0]
     assert np.max(np.abs(np.abs(Hc) - np.abs(Hu)) / np.abs(Hc)) > 1e-3
+
+
+# ---------------------------------------------------------------------------
+# Basis-invariance regression tests
+# ---------------------------------------------------------------------------
+# These exist because the original coupling analysis silently produced
+# different answers on macOS (Accelerate) and Linux (OpenBLAS) for the same
+# model -- a reported "-17.8% error from ignoring coupling" on one machine and
+# "-2.3%" on the other. Both were valid outputs of the same deterministic code,
+# because eigenvectors of a repeated eigenvalue are defined only up to a
+# rotation within their eigenspace and the two LAPACK builds chose differently.
+#
+# Any physical quantity must be invariant to that rotation. These tests assert
+# it directly, by re-running with a deliberately rotated (but equally valid)
+# eigenbasis.
+
+
+def _rotate_degenerate(res, pairs, theta):
+    """Rotate within degenerate subspaces -- still a valid eigenbasis."""
+    import copy
+
+    phi = res.modes.copy()
+    c, s = np.cos(theta), np.sin(theta)
+    for i, j in pairs:
+        a, b = phi[:, i].copy(), phi[:, j].copy()
+        phi[:, i], phi[:, j] = c * a - s * b, s * a + c * b
+    out = copy.copy(res)
+    out.modes = phi
+    return out
+
+
+def _degenerate_pairs(res, rtol=0.02):
+    return [
+        (c[0], c[1]) for c in cluster_modes(res.frequencies, rtol=rtol) if len(c) > 1
+    ]
+
+
+def test_coupled_frf_is_basis_invariant(mount):
+    """The full coupled FRF must not depend on the degenerate basis at all.
+
+    This one held even before the fix -- solving the full modal system is
+    basis-independent by construction. It is the control for the test below.
+    """
+    model, res, _ = mount
+    node = motor_node_index()
+    C = discrete_damper_matrix(model.n_dof, [(node * 6 + 0, 180.0), (node * 6 + 4, 6.0)])
+    F = np.zeros(model.n_dof)
+    F[node * 6 + 0] = 1.0
+    freqs = np.linspace(100.0, 1500.0, 200)
+
+    pairs = _degenerate_pairs(res)
+    assert pairs, "benchmark part must have degenerate pairs for this test"
+
+    ref = None
+    for theta in (0.0, 0.4, 1.1):
+        H = modal_frf(
+            _rotate_degenerate(res, pairs, theta), C, freqs, F,
+            dofs_out=[node * 6 + 0], keep_coupling=True,
+        )[0]
+        val = float(np.sqrt(np.trapezoid(np.abs(H) ** 2, freqs)))
+        if ref is None:
+            ref = val
+        assert abs(val - ref) / ref < 1e-9
+
+
+def test_uncoupled_frf_is_basis_invariant(mount):
+    """The uncoupled approximation must be basis-invariant too.
+
+    Before canonicalisation this varied by ~26 percentage points across valid
+    bases of the same eigensolution, which is what made the headline coupling
+    number irreproducible between machines.
+    """
+    model, res, _ = mount
+    node = motor_node_index()
+    C = discrete_damper_matrix(model.n_dof, [(node * 6 + 0, 180.0), (node * 6 + 4, 6.0)])
+    F = np.zeros(model.n_dof)
+    F[node * 6 + 0] = 1.0
+    freqs = np.linspace(100.0, 1500.0, 200)
+
+    pairs = _degenerate_pairs(res)
+    errors = []
+    for theta in (0.0, 0.2, 0.5, np.pi / 4, 1.0, 1.3, 2.1):
+        r = _rotate_degenerate(res, pairs, theta)
+        out = [node * 6 + 0]
+        Hc = modal_frf(r, C, freqs, F, dofs_out=out, keep_coupling=True)[0]
+        Hu = modal_frf(r, C, freqs, F, dofs_out=out, keep_coupling=False)[0]
+        rc = float(np.sqrt(np.trapezoid(np.abs(Hc) ** 2, freqs)))
+        ru = float(np.sqrt(np.trapezoid(np.abs(Hu) ** 2, freqs)))
+        errors.append(100.0 * (ru - rc) / rc)
+
+    spread = max(errors) - min(errors)
+    assert spread < 1e-6, (
+        f"uncoupled FRF varies by {spread:.2f} percentage points across "
+        f"equivalent eigenbases: {np.round(errors, 2)}"
+    )
+
+
+def test_degenerate_pairs_report_no_spurious_coupling(mount):
+    """A degenerate pair must not be reported as maximally coupled.
+
+    Pre-fix this returned eta = 1.000 for every degenerate pair, which looked
+    like a dramatic physical finding and was entirely an artifact.
+    """
+    model, res, _ = mount
+    node = motor_node_index()
+    C = discrete_damper_matrix(model.n_dof, [(node * 6 + 0, 180.0), (node * 6 + 4, 6.0)])
+
+    kap = coupling_index(modal_damping_matrix(res, C))
+    for i, j in _degenerate_pairs(res):
+        assert kap[i, j] < 0.05, (
+            f"degenerate modes {i+1},{j+1} report kappa={kap[i, j]:.3f}; "
+            "within a repeated eigenvalue this is basis-dependent, not physical"
+        )
+    # Genuine coupling between distinct frequencies must survive the fix.
+    assert kap.max() > 0.1, "canonicalisation must not erase real coupling"
+
+
+def test_coupling_index_is_basis_invariant(mount):
+    """kappa between distinct modes must not depend on the degenerate basis."""
+    model, res, _ = mount
+    node = motor_node_index()
+    C = discrete_damper_matrix(model.n_dof, [(node * 6 + 0, 180.0), (node * 6 + 4, 6.0)])
+
+    pairs = _degenerate_pairs(res)
+    ref = None
+    for theta in (0.0, 0.6, 1.4):
+        kap = coupling_index(
+            modal_damping_matrix(_rotate_degenerate(res, pairs, theta), C)
+        )
+        val = np.sort(kap, axis=None)
+        if ref is None:
+            ref = val
+        assert np.allclose(val, ref, atol=1e-8)

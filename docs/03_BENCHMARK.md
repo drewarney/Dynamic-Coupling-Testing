@@ -178,7 +178,8 @@ tuning.
 1. Problem statement with the Campbell diagram showing the baseline crossings.
 2. Method: the three-tier architecture and *why*.
 3. Verification: the analytical test table (< 0.1%).
-4. Coupling analysis: the 17.8% RMS result.
+4. Coupling analysis: the 29.9% RMS result, with the basis-invariance check
+   that makes it trustworthy.
 5. Surrogate validation: MAPE, p95, **and coverage**.
 6. Optimisation result: the before/after table.
 7. Physical validation: measured vs predicted, with diagnosis.

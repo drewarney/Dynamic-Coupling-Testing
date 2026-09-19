@@ -146,7 +146,33 @@ $\max|\kappa_{ij}| \approx 4\times10^{-13}$ — decoupled to machine precision.
 $$\tilde{C} = \Phi^T C \Phi, \qquad
 \kappa_{ij} = \frac{|\tilde{C}_{ij}|}{\sqrt{\tilde{C}_{ii}\tilde{C}_{jj}}}$$
 
-A single grounded dashpot at the payload gives $\max\kappa = 1.0$.
+A single grounded dashpot at the payload gives $\max\kappa = 0.70$.
+
+**A trap that invalidates this whole section if missed.** Eigenvectors of a
+*repeated* eigenvalue are defined only up to a rotation within their eigenspace,
+and different LAPACK builds return different rotations. Both $\kappa_{ij}$
+between degenerate modes and the act of zeroing off-diagonal terms are
+**not invariant** under that rotation. Measured on the benchmark mount, the same
+deterministic code reported anywhere from $-1.5\%$ to $-29.9\%$ for the
+"error from ignoring coupling" across valid bases of one eigensolution — and
+macOS (Accelerate) and Linux (OpenBLAS) genuinely disagreed.
+
+The fix: inside each degenerate cluster, rotate to the unique basis that
+diagonalises the damping block,
+
+$$\tilde{C}_{\mathcal{D}\mathcal{D}} = V\Lambda V^T,
+\qquad \Phi_{\mathcal{D}} \leftarrow \Phi_{\mathcal{D}}V$$
+
+Every rotation in the subspace is a valid eigenbasis, so this costs nothing and
+is uniquely determined. Afterwards the diagonal entries are the block's
+*eigenvalues* — rigorously invariant — and degenerate pairs correctly report
+$\kappa \approx 0$ instead of a spurious $\kappa = 1.0$.
+
+One further guard: a mode can have $\tilde{C}_{ii} = 0$ exactly, when a damper
+sits on a nodal point of its mode shape. Since physical $C$ is positive
+semi-definite, Cauchy–Schwarz gives $|\tilde{C}_{ij}|^2 \le
+\tilde{C}_{ii}\tilde{C}_{jj}$, so such a mode cannot couple at all and
+$\kappa$ is set to exactly zero rather than evaluated as $0/0$.
 
 **Frequency proximity.** Coupling strength alone is not enough — well-separated
 modes barely interact even when $\kappa$ is large. Combine with the fractional
@@ -179,7 +205,8 @@ $$\tilde{H}(\omega) = \Phi[\Omega^2 + i\omega\tilde{C} - \omega^2 I]^{-1}\Phi^T$
 
 The off-diagonal terms of $\tilde{C}$ are **kept** and the small (10–30 DOF)
 system solved directly. Zeroing them is the textbook uncoupled-SDOF assumption;
-on the benchmark part it understates band RMS response by **17.8%**.
+on the benchmark part it understates band RMS response by **29.9%** and peak
+response by **49.4%**.
 
 Band-limited RMS, the scalar the optimiser can minimise:
 

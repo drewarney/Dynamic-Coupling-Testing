@@ -30,7 +30,7 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import spsolve
 
 from ..fea.base import ModalResult
-from .modal import _as_array, mass_normalize
+from .modal import _as_array, canonicalize_degenerate_basis, mass_normalize
 
 
 def direct_frf(K, M, C, freqs_hz, F, dofs_out=None) -> np.ndarray:
@@ -55,6 +55,7 @@ def modal_frf(
     F,
     dofs_out=None,
     keep_coupling: bool = True,
+    canonical: bool = True,
 ) -> np.ndarray:
     r"""FRF via modal superposition, retaining cross-modal damping coupling.
 
@@ -62,9 +63,21 @@ def modal_frf(
     :math:`\tilde{C}` -- the textbook uncoupled-SDOF assumption.  Comparing the
     two curves is the cleanest way to *show* how much coupling matters for a
     given design, and makes a compelling plot in a project report.
+
+    ``canonical=True`` (default) canonicalises the basis inside degenerate
+    subspaces before dropping those terms. Do not turn it off: without it the
+    comparison is basis-dependent and varies by tens of percent between
+    platforms for the same model. See
+    :func:`dynopt.dynamics.modal.canonicalize_degenerate_basis`.
     """
     if res.modes is None or res.M is None:
         raise ValueError("modal_frf needs modes and M")
+
+    # Dropping off-diagonal damping terms is only well posed once the basis
+    # inside each degenerate subspace is pinned down; otherwise the result
+    # depends on which rotation LAPACK returned and is not reproducible.
+    if canonical and not keep_coupling:
+        res = canonicalize_degenerate_basis(res, C)
 
     phi = mass_normalize(res.modes, res.M)
     free = res.meta.get("free_dofs")

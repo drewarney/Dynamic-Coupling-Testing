@@ -43,7 +43,12 @@ import numpy as np
 import scipy.sparse as sp
 
 from ..fea.base import ModalResult
-from .modal import _as_array, mass_normalize
+from .modal import (
+    _as_array,
+    canonicalize_degenerate_basis,
+    mass_normalize,
+    modal_damping_matrix_raw,
+)
 
 
 def rayleigh_damping(M, K, zeta1: float, f1: float, zeta2: float, f2: float):
@@ -72,18 +77,53 @@ def discrete_damper_matrix(n_dof: int, dampers: list[tuple[int, float]]):
     return C.tocsr()
 
 
-def modal_damping_matrix(res: ModalResult, C) -> np.ndarray:
-    r""":math:`\tilde{C} = \Phi^T C \Phi` in the mass-normalised modal basis."""
+def modal_damping_matrix(
+    res: ModalResult, C, canonical: bool = True, rtol: float = 0.02
+) -> np.ndarray:
+    r""":math:`\tilde{C} = \Phi^T C \Phi` in the mass-normalised modal basis.
+
+    With ``canonical=True`` (the default) the eigenbasis is first canonicalised
+    inside every repeated-eigenvalue subspace -- see
+    :func:`dynopt.dynamics.modal.canonicalize_degenerate_basis`. Without it, the
+    off-diagonal terms involving degenerate modes are an artifact of whichever
+    rotation LAPACK returned, and differ between platforms.
+    """
     if res.modes is None or res.M is None:
         raise ValueError("need modes and M")
-    phi = mass_normalize(res.modes, res.M)
-    return phi.T @ _as_array(C) @ phi
+    if canonical:
+        res = canonicalize_degenerate_basis(res, C, rtol=rtol)
+    return modal_damping_matrix_raw(res, C)
 
 
-def coupling_index(Ctil: np.ndarray) -> np.ndarray:
-    r"""Normalised damping coupling matrix :math:`\kappa_{ij}` (diagonal zeroed)."""
-    d = np.sqrt(np.clip(np.diag(Ctil), 1e-30, None))
-    K = np.abs(Ctil) / np.outer(d, d)
+def coupling_index(Ctil: np.ndarray, rel_tol: float = 1e-9) -> np.ndarray:
+    r"""Normalised damping coupling matrix :math:`\kappa_{ij}` (diagonal zeroed).
+
+    .. math:: \kappa_{ij} = \frac{|\tilde{C}_{ij}|}
+                                  {\sqrt{\tilde{C}_{ii}\tilde{C}_{jj}}}
+
+    **Undamped modes.** A mode can have :math:`\tilde{C}_{ii} = 0` exactly --
+    it happens whenever a discrete damper sits on a nodal point of that mode
+    shape, which is common on symmetric structures. The ratio is then 0/0.
+
+    Physical damping matrices are positive semi-definite, so Cauchy-Schwarz
+    gives :math:`|\tilde{C}_{ij}|^2 \le \tilde{C}_{ii}\tilde{C}_{jj}`: a mode
+    with zero modal damping has :math:`\tilde{C}_{ij} = 0` for every ``j`` and
+    genuinely cannot exchange energy through damping. Its coupling is therefore
+    set to exactly zero rather than left to float on rounding noise -- which
+    otherwise amplifies 1e-14 perturbations into differences of ~1e-3 and makes
+    the metric irreproducible across platforms.
+
+    ``rel_tol`` is applied relative to the largest diagonal entry.
+    """
+    d = np.diag(Ctil).astype(float)
+    scale = float(np.max(np.abs(d))) if d.size else 0.0
+    live = d > rel_tol * scale if scale > 0 else np.zeros_like(d, dtype=bool)
+
+    K = np.zeros_like(Ctil, dtype=float)
+    if live.sum() >= 2:
+        idx = np.where(live)[0]
+        sub = np.sqrt(d[idx])
+        K[np.ix_(idx, idx)] = np.abs(Ctil[np.ix_(idx, idx)]) / np.outer(sub, sub)
     np.fill_diagonal(K, 0.0)
     return K
 
@@ -98,7 +138,7 @@ def frequency_separation(freqs: np.ndarray) -> np.ndarray:
     return d
 
 
-def energy_transfer_index(res: ModalResult, C) -> np.ndarray:
+def energy_transfer_index(res: ModalResult, C, canonical: bool = True) -> np.ndarray:
     r"""Combined coupling metric :math:`\eta_{ij} \in [0,1]`.
 
     Folds damping coupling strength together with frequency proximity.  Values
@@ -106,16 +146,23 @@ def energy_transfer_index(res: ModalResult, C) -> np.ndarray:
     separated *together*, not individually, or the optimiser will push one into
     the other.
     """
-    kap = coupling_index(modal_damping_matrix(res, C))
+    kap = coupling_index(modal_damping_matrix(res, C, canonical=canonical))
     delta = frequency_separation(res.frequencies)
     eta = kap / np.sqrt(kap**2 + (delta / 2.0) ** 2 + 1e-30)
     np.fill_diagonal(eta, 0.0)
     return eta
 
 
-def coupled_pairs(res: ModalResult, C, threshold: float = 0.3) -> list[dict]:
-    """List mode pairs whose energy-transfer index exceeds ``threshold``."""
-    eta = energy_transfer_index(res, C)
+def coupled_pairs(
+    res: ModalResult, C, threshold: float = 0.3, canonical: bool = True
+) -> list[dict]:
+    """List mode pairs whose energy-transfer index exceeds ``threshold``.
+
+    With ``canonical=True`` degenerate pairs correctly report near-zero coupling
+    instead of a spurious ``eta = 1.0``, so what remains is genuine coupling
+    between distinct frequencies.
+    """
+    eta = energy_transfer_index(res, C, canonical=canonical)
     out = []
     for i in range(eta.shape[0]):
         for j in range(i + 1, eta.shape[1]):
