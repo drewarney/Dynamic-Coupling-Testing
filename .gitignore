@@ -1,0 +1,32 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# FEA and CAD artifacts
+*.step
+*.stp
+*.inp
+*.frd
+*.dat
+*.cvg
+*.sta
+*.eig
+*.msh
+*.hb
+*.rst
+*.db
+*.esav
+*.full
+file*.err
+file*.log
+
+# results
+*.npz
+results/
