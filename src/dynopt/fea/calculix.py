@@ -52,11 +52,18 @@ class CalculiXConfig:
     mesh_size: float = 3.0            # target element size [mm]
     mesh_size_min: float = 0.8
     order: int = 2                    # 2 => C3D10; do not lower this
-    fix_selector: str = "z_min"       # which faces to clamp
-    fix_tol: float = 1e-3
+    fix_selector: str = "z_min"       # "z_min" | "z_plane" | "all"
+    fix_plane: float = 0.0            # used when fix_selector == "z_plane"
+    fix_tol: float = 1e-3             # ABSOLUTE, in model units (mm)
+    solid_type: str = "C3D10"         # element type to keep from the gmsh mesh
     ccx_path: str = "ccx"
     export_matrices: bool = False     # *MATRIX OUTPUT (version dependent)
     keep_files: bool = False
+    # Non-structural payload, smeared over the nodes of the top face within
+    # `payload_radius` of the part axis -- a motor bolted to its flange.  Put on
+    # a single node it would instead excite a spurious local mode.
+    payload_mass: float = 0.0         # model mass units (tonne for mm/t/s)
+    payload_radius: float = 0.0       # model length units (mm)
 
 
 def mesh_step(
@@ -77,7 +84,26 @@ def mesh_step(
         gmsh.option.setNumber("General.Terminal", 0)
         gmsh.model.add("part")
         gmsh.model.occ.importShapes(step_path)
+
+        # A STEP file routinely contains several solids that merely *touch*
+        # rather than overlap -- CAD booleans leave tangent contacts unfused, so
+        # what looks like one part arrives as a compound.  Meshed as-is, each
+        # solid gets its own nodes on the shared face and the assembly is
+        # mechanically disconnected: the modal solve then returns six
+        # rigid-body modes for whatever floats free of the constraints, with no
+        # warning from either mesher or solver.
+        #
+        # `fragment` imprints the volumes on one another so they share interface
+        # faces and the mesh comes out conformal (a bonded joint, which is the
+        # right default for a welded or monolithic part).  This is essential for
+        # arbitrary customer geometry, not just this benchmark.
+        vols = gmsh.model.occ.getEntities(3)
+        if len(vols) > 1:
+            gmsh.model.occ.fragment(vols[:1], vols[1:])
+        gmsh.model.occ.removeAllDuplicates()
         gmsh.model.occ.synchronize()
+
+        n_vol = len(gmsh.model.getEntities(3))
 
         gmsh.option.setNumber("Mesh.CharacteristicLengthMax", cfg.mesh_size)
         gmsh.option.setNumber("Mesh.CharacteristicLengthMin", cfg.mesh_size_min)
@@ -93,33 +119,126 @@ def mesh_step(
 
         tags, coords, _ = gmsh.model.mesh.getNodes()
         coords = np.asarray(coords, dtype=float).reshape(-1, 3)
+
+        # Guard the failure above: after fragmenting, a conformal mesh must not
+        # contain coincident duplicate nodes.  Duplicates here mean the solids
+        # were never joined and the result would be silently wrong.
+        if n_vol > 1:
+            uniq = np.unique(np.round(coords, 6), axis=0)
+            if uniq.shape[0] < coords.shape[0] - 1:
+                raise RuntimeError(
+                    f"mesh has {coords.shape[0] - uniq.shape[0]} coincident "
+                    f"duplicate nodes across {n_vol} volumes: the solids are not "
+                    "bonded and the model would be mechanically disconnected"
+                )
         return coords, np.asarray(tags, dtype=int)
     finally:
         gmsh.finalize()
 
 
 def _select_fixed_nodes(coords: np.ndarray, tags: np.ndarray, cfg: CalculiXConfig):
-    """Pick clamped nodes geometrically (the bolt-down face)."""
+    """Pick clamped nodes geometrically (the bolt-down face).
+
+    ``fix_tol`` is **absolute**, in model units, not a fraction of the bounding
+    box.  A relative tolerance looks safer but is not: it silently rescales with
+    the part, and on a design whose true mounting face is not the global lowest
+    surface it selects a handful of stray nodes instead of a face.  That failure
+    is invisible -- the solve succeeds and returns confident nonsense.
+
+    ``"z_plane"`` clamps a *named* plane (``fix_plane``) instead of whatever
+    happens to be lowest, which is the safer choice in an optimisation loop
+    where design variables move geometry around.
+    """
+    z = coords[:, 2]
     if cfg.fix_selector == "z_min":
-        z = coords[:, 2]
-        sel = z <= z.min() + cfg.fix_tol * max(np.ptp(z), 1.0)
+        sel = z <= z.min() + cfg.fix_tol
+    elif cfg.fix_selector == "z_plane":
+        sel = np.abs(z - cfg.fix_plane) <= cfg.fix_tol
     elif cfg.fix_selector == "all":
         sel = np.ones(coords.shape[0], dtype=bool)
     else:
         raise ValueError(f"unknown fix_selector {cfg.fix_selector!r}")
+    if not sel.any():
+        raise ValueError(
+            f"fix_selector {cfg.fix_selector!r} matched no nodes "
+            f"(z range {z.min():.4g}..{z.max():.4g}, tol {cfg.fix_tol:g})"
+        )
     return tags[sel]
 
 
-def write_modal_deck(
-    inp_mesh: str, out_inp: str, fixed_tags: np.ndarray, cfg: CalculiXConfig
-) -> str:
-    """Wrap a Gmsh-written mesh in a CalculiX ``*FREQUENCY`` deck."""
-    with open(inp_mesh) as fh:
-        mesh_body = fh.read()
+def _split_mesh_inp(path: str, solid_type: str) -> tuple[list[str], list[str]]:
+    """Split a Gmsh-written .inp into its node block and *solid* elements only.
 
-    # Gmsh emits *ELEMENT, type=C3D10 for order-2 tets; keep whatever it wrote
-    # but make sure a solid section and material exist.
-    lines = [mesh_body.rstrip(), ""]
+    Gmsh meshes every entity it knows about, so a 3D mesh file also contains the
+    1D elements of the curves (``T3D3``) and the 2D elements of the surfaces
+    (``CPS6``).  Handing those to CalculiX is fatal -- they need their own
+    sections, and any that survive contribute spurious low-frequency modes.
+
+    Gmsh also names its element sets after geometric entities (``Volume1``,
+    ``Surface3``); it never emits the Abaqus-conventional ``EALL``.  Referencing
+    ``EALL`` in a ``*SOLID SECTION`` aborts the run with
+    "element set EALL has not yet been defined".
+
+    Returns ``(node_lines, element_lines)``, the element lines renumbered into a
+    single set this module controls.
+    """
+    nodes: list[str] = []
+    elems: list[str] = []
+    mode = None
+    keep = False
+
+    with open(path) as fh:
+        for line in fh:
+            stripped = line.strip()
+            if stripped.startswith("*"):
+                key = stripped.upper()
+                if key.startswith("*NODE"):
+                    mode, keep = "node", True
+                elif key.startswith("*ELEMENT"):
+                    mode = "elem"
+                    keep = f"TYPE={solid_type.upper()}" in key.replace(" ", "")
+                else:
+                    mode, keep = None, False
+                continue
+            if not stripped or not keep:
+                continue
+            (nodes if mode == "node" else elems).append(stripped)
+    return nodes, elems
+
+
+def write_modal_deck(
+    inp_mesh: str,
+    out_inp: str,
+    fixed_tags: np.ndarray,
+    cfg: CalculiXConfig,
+    payload_tags: np.ndarray | None = None,
+) -> str:
+    """Write a self-contained CalculiX ``*FREQUENCY`` deck.
+
+    The mesh is rebuilt from the Gmsh file rather than included verbatim, so
+    only solid elements reach the solver and the element set the material is
+    assigned to is one we defined ourselves.
+    """
+    node_lines, elem_lines = _split_mesh_inp(inp_mesh, cfg.solid_type)
+    if not elem_lines:
+        raise ValueError(
+            f"no {cfg.solid_type} elements in {inp_mesh}; "
+            "check Mesh.ElementOrder and that the STEP contains a solid"
+        )
+
+    lines = ["*HEADING", "dynopt modal analysis", "*NODE"]
+    lines += node_lines
+    lines.append(f"*ELEMENT, TYPE={cfg.solid_type}, ELSET=ESOLID")
+    lines += elem_lines
+
+    if cfg.payload_mass > 0.0 and payload_tags is not None and payload_tags.size:
+        share = cfg.payload_mass / payload_tags.size
+        start = max(int(e.split(",")[0]) for e in elem_lines) + 1
+        lines.append("*ELEMENT, TYPE=MASS, ELSET=EPAYLOAD")
+        for k, tag in enumerate(payload_tags):
+            lines.append(f"{start + k}, {tag}")
+        lines += ["*MASS, ELSET=EPAYLOAD", f"{share:.8e}"]
+
     lines.append("*NSET, NSET=FIXED")
     for i in range(0, fixed_tags.size, 8):
         lines.append(", ".join(str(t) for t in fixed_tags[i : i + 8]) + ",")
@@ -130,7 +249,7 @@ def write_modal_deck(
         f"{cfg.E:.6e}, {cfg.nu:.4f}",
         "*DENSITY",
         f"{cfg.rho:.6e}",
-        "*SOLID SECTION, ELSET=EALL, MATERIAL=PARTMAT",
+        "*SOLID SECTION, ELSET=ESOLID, MATERIAL=PARTMAT",
         "*BOUNDARY",
         "FIXED, 1, 3",
         "*STEP",
@@ -140,9 +259,6 @@ def write_modal_deck(
         "U",
     ]
     if cfg.export_matrices:
-        # Writes the assembled stiffness/mass. The emitted filenames are
-        # CalculiX-version dependent -- verify against your build before relying
-        # on them in an automated loop.
         lines.append("*MATRIX OUTPUT, STIFFNESS, MASS")
     lines += ["*END STEP", ""]
 
@@ -250,14 +366,31 @@ class CalculiXSolver(ModalSolver):
             self.cad.export_step(params, step)
             coords, tags = mesh_step(step, mesh_inp, cfg)
             fixed = _select_fixed_nodes(coords, tags, cfg)
-            write_modal_deck(mesh_inp, job + ".inp", fixed, cfg)
+
+            payload = None
+            if cfg.payload_mass > 0.0:
+                z = coords[:, 2]
+                rad = np.hypot(coords[:, 0], coords[:, 1])
+                on_top = z >= z.max() - cfg.fix_tol
+                within = rad <= cfg.payload_radius
+                payload = tags[on_top & within]
+                if payload.size == 0:
+                    raise ValueError(
+                        f"payload_radius={cfg.payload_radius:g} selected no nodes "
+                        f"on the top face (max radius there "
+                        f"{rad[on_top].max() if on_top.any() else float('nan'):.3g})"
+                    )
+            write_modal_deck(mesh_inp, job + ".inp", fixed, cfg, payload_tags=payload)
 
             proc = subprocess.run(
                 [cfg.ccx_path, "job"], cwd=tmp, capture_output=True, text=True, timeout=3600
             )
-            if not os.path.exists(job + ".dat"):
+            # CalculiX creates job.dat and then aborts on a bad deck, so an
+            # existence check is not enough -- an empty file means failure.
+            if not os.path.exists(job + ".dat") or os.path.getsize(job + ".dat") == 0:
                 raise RuntimeError(
-                    f"ccx produced no .dat file.\nstdout:\n{proc.stdout[-2000:]}\n"
+                    "ccx produced no eigenvalue output (deck rejected or solve "
+                    f"aborted).\nstdout:\n{proc.stdout[-3000:]}\n"
                     f"stderr:\n{proc.stderr[-2000:]}"
                 )
 

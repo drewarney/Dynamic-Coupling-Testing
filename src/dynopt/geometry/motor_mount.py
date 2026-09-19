@@ -175,12 +175,20 @@ class MotorMountCAD(ParametricModel):
             p0 = cq.Vector(cx * span * mm, cy * span * mm, 0)
             p1 = cq.Vector(cx * top_span * mm, cy * top_span * mm, h * mm)
             axis = p1.sub(p0)
+            # Run the leg THROUGH the plate rather than stopping at its
+            # underside.  A leg that merely meets the plate face produces no
+            # boolean intersection in OpenCASCADE, so `union` silently returns a
+            # compound of disjoint solids: the STEP then carries five separate
+            # volumes, the mesher meshes each independently, and the modal solve
+            # reports six rigid-body modes because the platform is mechanically
+            # attached to nothing.  Verified: embed = 0 gives 5 volumes,
+            # embed >= plate_thk gives 1.
             leg = (
                 cq.Workplane("XY")
                 .transformed(offset=p0)
                 .circle(dia * mm / 2)
                 .circle(max(dia / 2 - thk, 1e-4) * mm)
-                .extrude(axis.Length)
+                .extrude(axis.Length + pthk * mm)
             )
             # Tilt the extrusion onto the real leg axis.
             zax = cq.Vector(0, 0, 1)
@@ -202,7 +210,30 @@ class MotorMountCAD(ParametricModel):
                 .hole(self.bolt_dia * mm)
             )
             result = result.union(leg).union(foot)
-        return result
+
+        # Trim everything below the mounting plane.  Each leg is extruded
+        # vertically and then rotated onto its true axis, which swings the
+        # tilted end face below z = 0 -- on the default design by 4.2 mm.  Left
+        # in, the part has no flat bolt-down face at all: a geometric "lowest
+        # face" selector then clamps four isolated leg tips instead of the feet,
+        # and the modal result is meaningless.  Caught by cross-checking the
+        # meshed solid against the beam idealisation.
+        below = (
+            cq.Workplane("XY")
+            .box(8 * span * mm, 8 * span * mm, 10 * dia * mm, centered=(True, True, False))
+            .translate((0, 0, -10 * dia * mm))
+        )
+        # Trim the legs flush with the top of the plate.  They are deliberately
+        # extruded past it (see above) so the boolean union actually fuses;
+        # without this second cut they protrude, which both looks wrong and
+        # breaks any "select the top face" query -- the highest nodes would be
+        # four leg tips rather than the mounting surface.
+        above = (
+            cq.Workplane("XY")
+            .box(8 * span * mm, 8 * span * mm, 10 * dia * mm, centered=(True, True, False))
+            .translate((0, 0, (h + pthk) * mm))
+        )
+        return result.cut(below).cut(above)
 
     def export_step(self, params: dict[str, float], path: str) -> str:
         import cadquery as cq  # noqa: F401  (validated in build)
