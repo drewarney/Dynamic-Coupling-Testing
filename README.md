@@ -6,20 +6,51 @@ geometry to move resonances out of an excitation band while minimising mass.
 
 **Benchmark: a 4-leg motor mount for a 350 g BLDC motor running 1,000–6,000 RPM.**
 
+All figures below are from the **3D solid solver** (Gmsh + CalculiX, quadratic
+tets, mesh-converged to −0.51%). The beam tier is used for exploration only;
+see [Two tiers, and why the table is 3D](#two-tiers-and-why-the-table-is-3d).
+
 | | Baseline | Optimised | Change |
 |---|---|---|---|
-| Mass | 540.9 g | **465.7 g** | **−13.9%** |
-| Lowest natural frequency | 242.4 Hz | **798.7 Hz** | **+229.5%** |
-| Minimum band separation | *violated* | **99.7%** | requirement: 25% |
-| Constraint violation | 1.127 | **0.000** | feasible |
+| Mass | 502.9 g | **420.4 g** | **−16.4%** |
+| Lowest natural frequency | 423.9 Hz | **1198.2 Hz** | **+182.7%** |
+| Minimum band separation | 6.0% *(fails)* | **199.6%** | requirement: 25% |
 
-Achieved in **64 FEA evaluations / 93 seconds** — roughly 9× fewer solver calls
-than direct gradient optimisation on the same problem.
+The baseline's first mode sits 6.0% above the 4X excitation band — it does not
+resonate, but it has nowhere near the 25% separation a rotating assembly needs,
+so any tolerance stack or thermal shift pushes it in. The optimised design is
+**16.4% lighter and clears every band by ≥199%**, because the two objectives
+stopped conflicting once material was free to redistribute.
 
-The baseline mount resonates at 3,636 RPM (4X crossing of a 242 Hz mode carrying
-69% of the vertical effective mass) — squarely mid-operating-range. The
-optimised design is **lighter *and* clear of every excitation band**, because
-the two objectives stopped conflicting once material was allowed to redistribute.
+Cost: **64 beam-tier evaluations** to explore, **4 3D solves** to verify.
+
+### Two tiers, and why the table is 3D
+
+The beam tier runs in ~11 ms and makes the design-space exploration possible.
+It is *not* quotable. Calibrated against seven mesh-converged 3D reference
+points, its error is design-dependent with **both signs**, from −27.1% to
++4.8%, so no scalar correction removes it:
+
+| | Tier 0 (beam) | Tier 1 (3D solid) | Tier 0 error |
+|---|---|---|---|
+| Optimised f₁ | 819.8 Hz | 1198.2 Hz | **−31.6%** |
+| Baseline f₁ | 244.6 Hz | 423.9 Hz | −42.3% |
+
+Two physical causes, both measured: leg slenderness (error correlates with
+`leg_thk` at r = −0.874; below L/d ≈ 4.5 beam theory stops representing a
+member) and plate aspect ratio (r = −0.780).
+
+**The optimiser converged to L/d = 4.00 — outside the beam tier's validated
+envelope.** That is not bad luck: raising frequency favours short stubby legs,
+which is exactly where beam theory fails. An optimiser reliably walks into its
+solver's blind spot, because the blind spot looks like cheap objective gain.
+`tier0_validity()` flags such designs, and `examples/06_tier1_signoff.py`
+re-solves them in 3D before any number is published.
+
+Here the beam tier erred *conservatively*, so the design is safe. Had it erred
+the other way, the beam-tier table would have shown a comfortable margin on a
+design that genuinely violated it — and nothing in that tier would have
+objected.
 
 ---
 

@@ -136,9 +136,17 @@ not your structure — see `tests/test_dynamics.py::test_uncoupled_frf_is_basis_
 
 ### Acceptance test
 ```bash
-python examples/03_surrogate_training.py    # < 2% MAPE, ~90% coverage
-python examples/04_full_optimization.py     # beats baseline, all modes clear
+python examples/03_surrogate_training.py              # < 2% MAPE, ~90% coverage
+python examples/04_full_optimization.py --save o.json # beats baseline
+python examples/06_tier1_signoff.py o.json            # MUST pass before quoting
 ```
+
+**A cheap solver's optimum is not a result.** The optimiser will find the
+region where your fast model is most wrong, because that is where the objective
+looks cheapest to improve. On this benchmark it converged to a leg slenderness
+of L/d = 4.00, below the beam tier's validated floor of 4.5, and the beam tier
+under-predicted that design's first mode by 31.6%. Verify every published
+design on the highest-fidelity solver you have.
 
 ### Why a GP and not a neural net
 

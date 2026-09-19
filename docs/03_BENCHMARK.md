@@ -32,82 +32,98 @@ smallest problem that is still *genuinely hard*:
 
 ## 4.2 Baseline: why this design fails
 
-```
-mass 540.9 g
-  bounce_z       242.4 Hz     ← 69.4% effective mass in Z
-  sway_rock_1    264.4 Hz     ← degenerate pair
-  sway_rock_2    555.7 Hz
-  torsion_z      901.9 Hz
-```
+**Tier 1 (3D solid, mesh-converged):** 502.9 g, first mode 423.9 Hz.
 
-**Campbell crossings inside the operating range:**
+| mode | freq | min separation | required | inside a band? |
+|---|---|---|---|---|
+| 1 | 423.9 Hz | **6.0%** | 25% | no |
+| 2 | 572.1 Hz | 43.0% | 25% | no |
+| 3 | 573.1 Hz | 43.3% | 25% | no |
+| 4 | 994.7 Hz | 148.7% | 25% | no |
 
-| Mode | Order | Crossing |
-|---|---|---|
-| bounce_z (242.4 Hz) | 4X | **3,636 RPM** |
-| sway_rock (264.4 Hz) | 4X | **3,966 RPM** |
+The baseline **fails the margin requirement without actually resonating.** Its
+first mode sits 6.0% above the 4X band top (400 Hz at 6,000 RPM) — no mode lies
+inside any excitation band. Six percent is not engineering margin: a tolerance
+stack, a temperature change or a bolt-preload shift moves it in. Rotating
+assemblies are specified at 20–25% for exactly this reason.
 
-Both sit squarely mid-range, and the bounce mode carries 69% of the vertical
-effective mass. This mount would be unusable — it resonates on the way to
-operating speed and again on spin-down.
-
-Constraint violation: **1.127** (feasible = 0).
+> **Correction.** An earlier version of this document reported a 4X Campbell
+> crossing at 3,636 RPM and described the baseline as resonating mid-range.
+> That was a Tier 0 artifact: the beam tier put the first mode at 242.4 Hz,
+> which *does* cross 4X. The 3D solver puts it at 423.9 Hz, which does not.
+> The baseline is marginal, not resonant. The engineering conclusion —
+> this design needs fixing — is unchanged; the reason is different.
 
 ## 4.3 Result
 
 ```
-python examples/04_full_optimization.py
+python examples/04_full_optimization.py --save optimum.json   # Tier 0, explores
+python examples/06_tier1_signoff.py optimum.json              # Tier 1, verifies
 ```
+
+**Quotable figures, 3D solid solver, mesh-converged to −0.51%:**
 
 | | Baseline | Optimised | Change |
 |---|---|---|---|
-| Mass | 540.9 g | **465.7 g** | **−13.9%** |
-| Lowest mode | 242.4 Hz | **798.7 Hz** | **+229.5%** |
-| `bounce_z` | 242.4 Hz | 1146.4 Hz | +373% |
-| `sway_rock_1` | 264.4 Hz | 798.7 Hz | +202% |
-| `torsion_z` | 901.9 Hz | 976.9 Hz | +8% |
-| Min separation | violated | **99.7%** | required 25% |
-| Constraint violation | 1.127 | **0.000** | feasible |
+| Mass | 502.9 g | **420.4 g** | **−16.4%** |
+| Structural mass | 152.9 g | 70.4 g | −54.0% |
+| f₁ | 423.9 Hz | **1198.2 Hz** | **+182.7%** |
+| Min band separation | 6.0% *(fail)* | **199.6%** | requirement 25% |
 
-**Lighter *and* dramatically safer** — the two objectives were not actually in
-conflict once the geometry was allowed to redistribute material. That is the
-result worth leading with: the naive engineering instinct ("I'll have to add
-mass to stiffen it") is wrong, and the optimiser demonstrates why.
+Per-mode verification on the 3D solver:
+
+| mode | freq | separation | status |
+|---|---|---|---|
+| 1 | 1198.2 Hz | 199.6% | PASS |
+| 2 | 1201.2 Hz | 200.3% | PASS |
+| 3 | 1830.5 Hz | 357.6% | PASS |
+| 4 | 1933.5 Hz | 383.4% | PASS |
+| 5 | 3115.1 Hz | 678.8% | PASS |
+| 6 | 3159.8 Hz | 690.0% | PASS |
+
+**Lighter *and* dramatically safer** — the objectives were not truly in conflict
+once the geometry could redistribute material.
+
+### Mesh convergence
+
+| h | nodes | f₁ | Δ |
+|---|---|---|---|
+| 4.0 mm | 15,144 | 1211.4 Hz | — |
+| 3.0 mm | 24,450 | 1204.4 Hz | −0.58% |
+| 2.4 mm | 36,943 | 1198.2 Hz | −0.51% |
 
 ### Cost
 
 | Metric | Value |
 |---|---|
-| FEA evaluations | 64 |
-| Wall time | 93 s |
-| Surrogate accuracy | 0.52–1.97% MAPE |
-| Surrogate speed | 0.018 ms vs 11 ms FEA (**~600×**) |
-
-For comparison, direct SLSQP on the same problem needs roughly 600 evaluations —
-**a ~9× reduction in solver calls**, which at Tier-1 CalculiX cost (≈30 s/solve)
-is the difference between 32 minutes and 5 hours.
+| Tier 0 evaluations (exploration) | 64 |
+| Tier 1 solves (verification) | 4 |
+| Tier 0 wall time | 93 s |
+| Tier 1 wall time | ~3 min |
 
 ### Optimised geometry
 
 | Variable | Baseline | Optimised |
 |---|---|---|
-| `leg_thk` | 2.000 mm | 1.038 mm |
-| `leg_dia` | 14.000 mm | 12.463 mm |
+| `leg_thk` | 2.000 mm | 1.000 mm ← at bound |
+| `leg_dia` | 14.000 mm | 9.838 mm |
 | `span` | 70.000 mm | 40.000 mm ← at bound |
 | `height` | 60.000 mm | 30.000 mm ← at bound |
-| `plate_thk` | 3.000 mm | 7.058 mm |
+| `plate_thk` | 3.000 mm | 7.687 mm |
 
-The physics is clear and checkable by hand: **shorten and squat the legs**
-(frequency $\propto 1/L^2$ for bending), **thin the walls** to recover mass, and
-**thicken the plate**, which the GP sensitivity analysis independently
-identified as the dominant lever (0.49 of total influence).
+Shorten and squat the legs (bending frequency ∝ 1/L²), thin the walls to
+recover mass, thicken the plate — which the GP sensitivity analysis
+independently identified as the dominant lever.
 
-> **Honest limitation:** `span` and `height` both converged to their *lower
-> bounds*. The constraint is active, meaning the true unconstrained optimum lies
-> outside the stated design space. In a real programme those bounds come from
-> packaging and bolt-pattern requirements, so this is the right answer to the
-> stated problem — but you should say so explicitly rather than presenting it as
-> an interior optimum. Widening the bounds is the obvious next study.
+> **Three bounds are active** (`leg_thk`, `span`, `height`). The true optimum
+> lies outside the stated design space, so this is the right answer to the
+> stated problem, not an interior optimum. Widening the bounds is the obvious
+> next study. In a real programme those bounds come from packaging and the
+> bolt pattern.
+
+> **The optimum sits outside Tier 0's validated envelope** (L/d = 4.00 against a
+> 4.5 floor), which is why the 3D sign-off is mandatory rather than advisory.
+> Tier 0 under-predicted its first mode by 31.6%.
 
 ## 4.4 Physical validation protocol
 
