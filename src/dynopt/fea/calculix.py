@@ -28,17 +28,86 @@ licence explicitly forbids commercial use.
 
 from __future__ import annotations
 
+import atexit
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import numpy as np
 import scipy.sparse as sp
 
 from .base import ModalResult, ModalSolver
+
+
+_GMSH_STARTED = False
+
+
+def _ensure_gmsh():
+    """Initialise Gmsh once per process and keep it alive.
+
+    Gmsh does not tolerate repeated ``initialize()``/``finalize()`` cycles: after
+    enough of them it aborts the process inside ``mesh``, with no Python
+    exception to catch. It surfaced first in the integration tests, but it is a
+    production bug -- a Tier 1 DOE meshes hundreds of designs in one process and
+    would die partway through a long run.
+
+    One session for the process lifetime, the model cleared between designs, and
+    finalisation left to ``atexit``.
+    """
+    try:
+        import gmsh
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise ImportError("gmsh is required: pip install 'dynopt[oss]'") from exc
+
+    global _GMSH_STARTED
+    try:
+        live = bool(gmsh.isInitialized())
+    except AttributeError:  # gmsh < 4.10
+        live = _GMSH_STARTED
+    if not live:
+        gmsh.initialize()
+        gmsh.option.setNumber("General.Terminal", 0)
+        if not _GMSH_STARTED:
+            atexit.register(_shutdown_gmsh)
+        _GMSH_STARTED = True
+    return gmsh
+
+
+def _shutdown_gmsh():  # pragma: no cover - runs at interpreter exit
+    global _GMSH_STARTED
+    if not _GMSH_STARTED:
+        return
+    _GMSH_STARTED = False
+    try:
+        import gmsh
+
+        if gmsh.isInitialized():
+            gmsh.finalize()
+    except Exception:
+        pass
+
+
+@contextmanager
+def gmsh_model(name: str = "part"):
+    """Scoped Gmsh model on the shared session.
+
+    Clears the previous model rather than tearing down the library. Use this
+    everywhere instead of ``gmsh.initialize()`` / ``gmsh.finalize()``.
+    """
+    gmsh = _ensure_gmsh()
+    gmsh.clear()
+    gmsh.model.add(name)
+    try:
+        yield gmsh
+    finally:
+        try:
+            gmsh.clear()
+        except Exception:
+            pass
 
 
 @dataclass
@@ -56,6 +125,27 @@ class CalculiXConfig:
     fix_plane: float = 0.0            # used when fix_selector == "z_plane"
     fix_tol: float = 1e-3             # ABSOLUTE, in model units (mm)
     solid_type: str = "C3D10"         # element type to keep from the gmsh mesh
+    # Gmsh's high-order optimiser pulls mid-side nodes onto the true CAD
+    # surface, which is worth a little accuracy on curved features. It is also
+    # capable of throwing an uncaught C++ exception that calls terminate() and
+    # kills the process -- no Python exception, nothing to catch, a long DOE
+    # simply dies. Measured on this benchmark: level 1 aborts at 3.0 mm
+    # elements, level 2 aborts at 5.0 mm, and which combination triggers it is
+    # not predictable. Level 0 is the only reliably safe setting and is the
+    # default. Raise it only for a one-off run you are watching.
+    high_order_optimize: int = 0
+    # Straight-sided quadratic tets: mid-side nodes at true edge midpoints
+    # instead of projected onto the CAD surface.
+    #
+    # Curved second-order tets on a tight bore routinely invert, and CalculiX
+    # rejects them with "nonpositive jacobian determinant" -- which is why the
+    # high-order optimiser exists. But that optimiser can abort the process
+    # outright, so neither curved-and-optimised nor curved-and-unoptimised is
+    # safe unattended. Straight-sided elements are quadratic in displacement,
+    # which is what avoids the over-stiff linear tet, and cannot invert. The
+    # cost is a slightly coarser geometric fit on curved surfaces, recovered by
+    # refining the mesh.
+    second_order_linear: bool = True
     ccx_path: str = "ccx"
     export_matrices: bool = False     # *MATRIX OUTPUT (version dependent)
     keep_files: bool = False
@@ -74,15 +164,7 @@ def mesh_step(
     Returns ``(node_coords, node_tags)``.  Gmsh writes Abaqus format natively,
     which CalculiX reads with only minor keyword additions.
     """
-    try:
-        import gmsh
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        raise ImportError("gmsh is required: pip install 'dynopt[oss]'") from exc
-
-    gmsh.initialize()
-    try:
-        gmsh.option.setNumber("General.Terminal", 0)
-        gmsh.model.add("part")
+    with gmsh_model("part") as gmsh:
         gmsh.model.occ.importShapes(step_path)
 
         # A STEP file routinely contains several solids that merely *touch*
@@ -110,9 +192,10 @@ def mesh_step(
         gmsh.option.setNumber("Mesh.ElementOrder", cfg.order)
         gmsh.option.setNumber("Mesh.Optimize", 1)
         gmsh.option.setNumber("Mesh.OptimizeNetgen", 1)
-        # Second-order nodes must sit on the true CAD surface, or curved
-        # features are under-resolved and stiffness is overestimated.
-        gmsh.option.setNumber("Mesh.HighOrderOptimize", 2)
+        gmsh.option.setNumber("Mesh.HighOrderOptimize", cfg.high_order_optimize)
+        gmsh.option.setNumber(
+            "Mesh.SecondOrderLinear", 1 if cfg.second_order_linear else 0
+        )
 
         gmsh.model.mesh.generate(3)
         gmsh.write(out_inp)
@@ -132,8 +215,18 @@ def mesh_step(
                     "bonded and the model would be mechanically disconnected"
                 )
         return coords, np.asarray(tags, dtype=int)
-    finally:
-        gmsh.finalize()
+
+
+def count_volumes(step_path: str) -> int:
+    """Number of distinct solid volumes in a STEP file.
+
+    More than one means the CAD booleans did not fuse and the part will mesh as
+    disconnected pieces.
+    """
+    with gmsh_model("volcheck") as gmsh:
+        gmsh.model.occ.importShapes(step_path)
+        gmsh.model.occ.synchronize()
+        return len(gmsh.model.getEntities(3))
 
 
 def _select_fixed_nodes(coords: np.ndarray, tags: np.ndarray, cfg: CalculiXConfig):

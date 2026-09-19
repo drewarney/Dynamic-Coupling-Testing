@@ -37,6 +37,7 @@ from dynopt.fea.calculix import (  # noqa: E402
     CalculiXSolver,
     _select_fixed_nodes,
     _split_mesh_inp,
+    count_volumes,
     mesh_step,
 )
 from dynopt.geometry import MOTOR_MOUNT_SPACE, MotorMountCAD  # noqa: E402
@@ -72,15 +73,7 @@ def test_cad_produces_single_contiguous_volume(step_file):
     OpenCASCADE, so `union` silently returns a compound. Meshed, the pieces
     share no nodes and the assembly falls apart.
     """
-    gmsh.initialize()
-    try:
-        gmsh.option.setNumber("General.Terminal", 0)
-        gmsh.model.add("check")
-        gmsh.model.occ.importShapes(step_file)
-        gmsh.model.occ.synchronize()
-        n_vol = len(gmsh.model.getEntities(3))
-    finally:
-        gmsh.finalize()
+    n_vol = count_volumes(step_file)
     assert n_vol == 1, f"STEP has {n_vol} disjoint volumes; the CAD union did not fuse"
 
 
@@ -216,15 +209,7 @@ def test_cad_valid_across_design_space(seed, tmp_path):
             solid = MotorMountCAD().build(params)
             bb = solid.val().BoundingBox()
             cq.exporters.export(solid, str(path))
-
-            gmsh.initialize()
-            try:
-                gmsh.option.setNumber("General.Terminal", 0)
-                gmsh.model.add(f"d{i}")
-                gmsh.model.occ.importShapes(str(path))
-                n_vol = len(gmsh.model.occ.getEntities(3))
-            finally:
-                gmsh.finalize()
+            n_vol = count_volumes(str(path))
 
             if n_vol != 1:
                 failures.append(f"design {i}: {n_vol} disjoint volumes")
@@ -305,3 +290,19 @@ def test_beam_and_solid_agree_on_leg_hollowness():
             assert leg_area == pytest.approx(solid_area, rel=1e-9)
         else:
             assert leg_area < solid_area
+
+
+
+def test_repeated_meshing_does_not_abort_the_process(step_file, tmp_path):
+    """Many meshes in one process must not kill the interpreter.
+
+    Gmsh aborts -- ``Fatal Python error: Aborted``, no catchable exception --
+    after enough initialize/finalize cycles. It showed up here first, but it is
+    a production bug: a Tier 1 DOE meshes hundreds of designs in one process.
+    The fix is one session for the process lifetime with the model cleared
+    between designs; this test pins that behaviour.
+    """
+    for i in range(12):
+        coords, tags = mesh_step(step_file, str(tmp_path / f"r{i}.inp"), _cfg())
+        assert coords.shape[0] > 500
+        assert tags.size == coords.shape[0]
