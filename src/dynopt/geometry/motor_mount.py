@@ -361,3 +361,54 @@ class MotorMountCAD(ParametricModel):
         solid = self.build(params)
         cq.exporters.export(solid, path)
         return path
+
+
+#: Leg slenderness (L/d) below which Euler-Bernoulli/Timoshenko beam theory
+#: stops representing a member. Measured against 3D solid solves, designs below
+#: this ran -16.8% mean error; above it, -1.4% mean.
+MIN_SLENDERNESS = 4.5
+
+#: Plate aspect ratio (width / thickness) above which the edge-beam-plus-spoke
+#: idealisation loses the plate's two-dimensional action. Error correlates with
+#: this more strongly (r = -0.78) than with leg slenderness.
+MAX_PLATE_ASPECT = 35.0
+
+
+def tier0_validity(params: dict[str, float]) -> dict:
+    r"""Report whether a design sits inside Tier 0's validated envelope.
+
+    A beam idealisation is not a general-purpose solver, and it will return a
+    confident number for a design it cannot represent. Calibration against
+    mesh-converged 3D solves showed the error is **design-dependent with both
+    signs** -- from -27.5% to +4.8% -- so no scalar correction fixes it:
+
+    ======================  ==========  ===============
+    Envelope                 n          max abs error
+    ======================  ==========  ===============
+    ``L/d >= 4.5``           5           11.1%
+    ``L/d <  4.5``           2           27.5%
+    ======================  ==========  ===============
+
+    Returns the two governing ratios and an ``ok`` flag. Use it to gate which
+    designs may be quoted from Tier 0 alone, and which must go to Tier 1. It is
+    advisory, not enforced: the optimiser is free to explore outside the
+    envelope, but anything it returns from out there needs a 3D sign-off.
+    """
+    span = float(params["span"])
+    dia = float(params["leg_dia"])
+    top_span = 0.55 * span
+    dx = span - top_span
+    length = float(np.sqrt(2.0 * dx**2 + float(params["height"]) ** 2))
+    slenderness = length / dia
+    aspect = (2.0 * top_span) / float(params["plate_thk"])
+    return {
+        "slenderness": slenderness,
+        "plate_aspect": aspect,
+        "ok": slenderness >= MIN_SLENDERNESS and aspect <= MAX_PLATE_ASPECT,
+        "reasons": [
+            *( [f"leg L/d = {slenderness:.2f} < {MIN_SLENDERNESS}"]
+               if slenderness < MIN_SLENDERNESS else [] ),
+            *( [f"plate aspect = {aspect:.1f} > {MAX_PLATE_ASPECT}"]
+               if aspect > MAX_PLATE_ASPECT else [] ),
+        ],
+    }

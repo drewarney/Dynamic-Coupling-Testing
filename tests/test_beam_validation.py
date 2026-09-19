@@ -207,3 +207,43 @@ def test_leg_section_matches_declared_hollowness():
         area = build_frame(p).sections[0].A
         expected = np.pi * ((p["leg_dia"] / 2) ** 2 - bore**2)
         assert area == pytest.approx(expected, rel=1e-9)
+
+
+def test_tier0_validity_envelope_flags_out_of_range_designs():
+    """Tier 0 must declare when a design is outside what it can represent.
+
+    Calibration against mesh-converged 3D solves showed the beam idealisation's
+    error is design-dependent with both signs (-27.5% to +4.8%), so no scalar
+    correction makes it quotable everywhere. The envelope is advisory: the
+    optimiser may explore outside it, but results from out there require a
+    Tier 1 sign-off.
+    """
+    from dynopt.geometry import MOTOR_MOUNT_SPACE, tier0_validity
+
+    space = MOTOR_MOUNT_SPACE
+    good = tier0_validity(space.to_dict(space.defaults))
+    assert good["ok"], good["reasons"]
+    assert good["slenderness"] == pytest.approx(5.34, abs=0.05)
+
+    # The worst measured reference point: 5.39 mm walls on a 22.6 mm tube with
+    # a 1.57 mm plate, which ran -27.5% against the 3D solver.
+    bad = tier0_validity(
+        {"leg_thk": 0.00539, "leg_dia": 0.02264, "span": 0.0633,
+         "height": 0.0638, "plate_thk": 0.00157}
+    )
+    assert not bad["ok"]
+    assert bad["slenderness"] < 4.5
+    assert bad["reasons"]
+
+
+def test_validity_envelope_is_monotone_in_slenderness():
+    """Lengthening a leg or thinning it must never reduce reported slenderness."""
+    from dynopt.geometry import tier0_validity
+
+    base = {"leg_thk": 0.002, "leg_dia": 0.014, "span": 0.07,
+            "height": 0.06, "plate_thk": 0.003}
+    ref = tier0_validity(base)["slenderness"]
+    taller = dict(base, height=0.09)
+    fatter = dict(base, leg_dia=0.022)
+    assert tier0_validity(taller)["slenderness"] > ref
+    assert tier0_validity(fatter)["slenderness"] < ref
