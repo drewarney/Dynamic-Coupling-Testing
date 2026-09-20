@@ -52,7 +52,7 @@ Held out, 14 pairs fitted, 10 designs tested:
 
 | | uncorrected | `constant` | `multiplicative` | `additive` |
 |---|---|---|---|---|
-| `motor_mount` | 40.23% | 25.31% | **18.27%** | 21.23% |
+| `motor_mount` | 24.42% | 20.37% | 16.96% | **16.52%** |
 | `cantilever_arm` | 20.97% | 13.21% | **4.91%** | 7.36% |
 
 The GP beats the scalar decisively on both parts, which settles a claim this
@@ -105,62 +105,90 @@ Both plateau within the budget a real project would spend. The scalar's
 flatness is the point: it converges immediately to an answer that is simply
 not very good.
 
+> **These mount numbers were re-measured.** The first run of this study gave
+> 40.23% / 25.31% / 18.27%. That was against a beam tier with a stiffness
+> defect, since fixed (§6.6), and re-running on the corrected tier moved every
+> mount figure. The arm's are unchanged; its beam tier never had the defect.
+
 ## 6.6 What this does not fix
 
-**The mount's corrected error is 18%. That is not quotable**, and the correction
-does not change the rule that anything published goes through a 3D sign-off
-(`examples/06_tier1_signoff.py`).
+**The mount's corrected error is 16.5%. That is not quotable**, and the
+correction does not change the rule that anything published goes through a 3D
+sign-off (`examples/06_tier1_signoff.py`).
 
-The two parts differ by a factor of four in corrected error. Across its design
-box the mount's beam-tier ratio runs **1.029 to 4.170**; the arm's runs **0.984
-to 1.173**.
+The two parts still differ by more than a factor of three in corrected error.
+Across its design box the mount's beam-tier ratio runs **0.904 to 2.630** after
+the fix below; the arm's runs **0.984 to 1.173** and never needed one.
 
-**It is not that the mount's frame idealisation is bad.** Running the mount
-bare — no payload — the two tiers agree to **0.8%** (beam 1262.2 Hz, 3D
-1252.0 Hz). The frame, the legs and the plate are all represented well. The
-error appears only when the motor goes on:
+**The mount's frame idealisation was not bad — one term in it was missing**,
+and finding it was worth more than the entire correction.
 
-| motor_mount, default design | beam | 3D | |
-|---|---|---|---|
-| bare structure | 1262.2 Hz | 1252.0 Hz | **+0.8%** |
-| with 350 g payload | 244.6 Hz | 437.9 Hz | **−44.1%** |
-| effect of adding the payload | ÷5.16 | ÷2.86 | |
+The clue was that the mount agreed far better unloaded than loaded. Four
+spokes carry the payload into the plate, and four narrow strips in bending
+reproduce only a fraction of a plate's two-dimensional stiffness: measured
+against plate theory, the idealisation was **11.4× too soft at the plate
+centre**, which is exactly where the motor sits.
 
-The beam tier is nearly twice as sensitive to the payload as the solid is,
-because a point mass at the plate centre sits on four edge beams with no
-membrane action to resist it. The plate is locally far too soft, and that
-softness scales with plate thickness and span — which is why the earlier
-calibration found the error correlating with plate aspect ratio at r = −0.780.
-That correlation now has a mechanism.
+Equating the four-spoke central stiffness to plate theory gives the *form* —
+effective width proportional to the platform span, which the code already
+assumed — so only the coefficient was wrong. Simply-supported theory gives 5.7;
+four discrete leg tops are softer than a continuous edge, so the coefficient is
+calibrated against 24 mesh-converged 3D designs, bare and loaded, fitted on half
+and reported on the other half:
 
-So the honest version of the rule is narrower and more useful than "the
-idealisation is wrong":
+| held-out first frequency | spoke factor 1.0 | **2.5** |
+|---|---|---|
+| bare structure | 10.1% | **7.5%** |
+| loaded | 40.8% | **13.7%** |
+| default design, loaded | −44.1% | **−14.9%** |
+| 3D/beam ratio, median over the box | 1.532 | **1.057** |
+| 3D/beam ratio, range | 1.029–4.170 | 0.904–2.630 |
 
-> A learned discrepancy sharpens a cheap model that is already structurally
-> right. Where it struggles, look for a *specific* missing physics before
-> concluding the tier is unusable — the mount's 18% residual is one modelling
-> gap, not a general failure of beam theory.
+One calibrated constant; `PLATE_WIDTH_FACTOR` stays at 1.0 because fitting it
+as well bought no held-out accuracy, and a second fitted constant has to earn
+its place.
 
-`examples/05_cross_solver_validation.py` prints this diagnostic, and
-`tests/test_solver_hints.py::test_the_beam_tier_is_sound_until_it_is_loaded`
-owns the numbers. Closing the gap — an effective plate stiffness under a
-central mass, or a shell element for the plate — is the highest-value follow-up
-this study produced, and it is worth more than any further work on the
-correction itself.
+### What that does to the case for a correction
+
+| mount, beam → fine | before the plate fix | after |
+|---|---|---|
+| uncorrected | 40.23% | 24.42% |
+| best correction | 18.27% | 16.52% |
+| what the correction buys | 22.0 points | 7.9 points |
+
+**Fixing the physics beat learning the discrepancy, and it shrank the
+correction's job by two-thirds.** A learned discrepancy is worth having, but it
+is second in line: it absorbs whatever a cheap model gets wrong, including
+things that a few hours of modelling would remove outright. Before fitting a
+correction, look for the missing term.
+
+`examples/05_cross_solver_validation.py` prints the diagnostic that found this,
+`tests/test_plate_calibration.py` owns the calibration, and `data/bare_refs.json`
+holds the unloaded references it needs.
 
 **An open question, stated rather than assumed.** Within a single mount design
-the per-column ratios are not consistent — design 8 gives
-`[4.17, 5.79, 4.12, 2.08, 1.40, 1.40]`, design 4 gives
+the per-column ratios are not consistent. On the *pre-fix* tier, design 8 gave
+`[4.17, 5.79, 4.12, 2.08, 1.40, 1.40]` and design 4 gave
 `[1.03, 1.03, 1.26, 1.47, 2.77, 2.79]`. A smooth fidelity discrepancy should
 not jump like that between adjacent columns. The likely cause is that sorted
 column *k* of one tier is not the same mode as column *k* of the other, which
 is exactly the hazard `MultiFidelitySurrogate.correspondence_report()` exists
-to expose, and the mount's per-column cv of up to 0.64 is consistent with it.
+to expose; the per-column cv is still 0.25–0.50 after the fix.
 
-It is **not yet demonstrated**. Splitting the designs by `tier0_validity()` did
-not separate the effect (inside the envelope the corrected error is 19.5–21.1%
-against 18.1% for all designs), but with 11 and 13 designs per group that test
-is underpowered rather than negative. Settling it needs 3D mode shapes stored
-alongside the frequencies and MAC-based matching instead of sorted order —
-which is the natural next piece of work, and would say whether the mount's
-residual 18% is idealisation error or bookkeeping.
+It is **not yet demonstrated**, but the plate fix added evidence for it. That
+fix is a pure stiffness correction, so it should lift every column roughly
+together. Held out, per column, it did not:
+
+| column | 0 | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| improvement (points) | −29 | −19 | −19 | −14 | −10 | −10 |
+
+Column 0 — where both tiers unambiguously mean "the lowest mode" — improved
+three times as much as column 4. A stiffness error does not behave that way; a
+column that is not comparing the same mode in both tiers does.
+
+Settling it still needs 3D mode shapes stored alongside the frequencies and
+MAC-based matching instead of sorted order. That is now cheaper than it was:
+the CalculiX backend records `nodes`, `payload_nodes` and a `dof_map` as of the
+backend-contract fix, so its mode shapes can finally be mapped back onto the
+geometry at all.

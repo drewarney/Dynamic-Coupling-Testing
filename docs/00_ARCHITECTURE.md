@@ -323,6 +323,21 @@ Three more rules:
    mount, which stands on z=0 and carries its motor on z=max. The cantilever
    arm runs along x, so the same code clamped and loaded the wrong faces. Both
    selectors now take `"<axis>_<min|max>"` from the part.
+9. **A number measured at one design is not a property of the part.** This has
+   now produced three wrong published claims, each of which survived review
+   because the one measurement behind it was correct:
+
+   | Claim, from the default design | Across 24 designs |
+   |---|---|
+   | `max_tier_ratio` for the mount is 2.00 | the ratio reached 4.17 |
+   | the bare structure agrees to 0.8% | bare error was 10.1% |
+   | the plate fix trades bare accuracy for loaded | both improve |
+
+   The default design is a *characterisation point*, and anything claimed about
+   the design **space** gets measured over a Sobol sample. The rule is cheap to
+   follow: the beam tier runs in milliseconds, and where 3D references are
+   needed, generating 24 of them costs about twenty minutes
+   (`data/bare_refs.json` is exactly that).
 
 ### 1.5.3 Two tiers are a free consistency check -- use it
 
@@ -332,14 +347,15 @@ the same physics. They may differ by the beam idealisation and by nothing else:
 | Part | Beam | 3D | Ratio | Declared bound |
 |---|---|---|---|---|
 | `cantilever_arm` | 113.7 Hz | 118.5 Hz | **1.042** | 1.20 |
-| `motor_mount` | 244.6 Hz | 424.4 Hz | **1.735** | 2.00 |
+| `motor_mount` | 372.6 Hz | 437.9 Hz | **1.175** | 1.35 |
 
-A clamped tube is very nearly a beam; a four-leg frame carrying a plate is not,
-and that 1.735 is precisely the error the multi-fidelity correction exists to
-remove.
+A clamped tube is very nearly a beam. The mount read 1.735 until its plate
+spokes were calibrated (§6.6 of `06_MULTIFIDELITY.md`); the bound was tightened
+with it, because a bound loose enough to admit the old idealisation would no
+longer catch a modelling bug.
 
 **Both numbers are the default design only, and that is deliberate.** The
-mount's ratio runs from 1.07 to 4.17 across its Sobol sample, because a beam
+mount's ratio runs from 0.90 to 2.63 across its Sobol sample, because a beam
 idealisation degrades as the geometry leaves the slender regime. A bound loose
 enough to cover that box would catch almost nothing. Which designs have left
 the regime is `tier0_validity()`'s job; this check's job is the

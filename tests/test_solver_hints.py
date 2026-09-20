@@ -313,17 +313,17 @@ def test_an_explicit_zero_payload_stays_zero():
 
 
 @pytest.mark.slow
-def test_the_beam_tier_is_sound_until_it_is_loaded():
-    """docs/06 S6.6. The mount's beam error is a payload gap, not a frame gap.
+def test_the_payload_stiffness_gap_stays_closed():
+    """docs/06 S6.6. The gap this used to document has been fixed.
 
-    Bare, the two tiers agree to under a percent. Loaded, they differ by 44%.
-    Both solve the same structure, so the error is in how each carries the
-    payload: a point mass at the plate centre rests on four edge beams with no
-    membrane action, and the plate is locally far too soft.
+    The mount's beam tier once agreed with 3D to 0.8% bare and erred 44%
+    loaded, because four narrow spokes reproduce a fraction of a plate's
+    stiffness and the payload sits exactly where that matters. Calibrating
+    PLATE_SPOKE_FACTOR closed most of it: the default design is now 15% rather
+    than 44%.
 
-    This is worth a test because it is the difference between "the beam tier is
-    unusable for this part" and "the beam tier has one fixable modelling gap",
-    and the first reading would retire a tier that is 2500x cheaper than 3D.
+    The assertion is kept -- inverted -- so the gap cannot quietly reopen, and
+    so that a future change to the plate model has to confront this number.
     """
     pytest.importorskip("gmsh", reason="Gmsh not installed")
     pytest.importorskip("cadquery", reason="CadQuery not installed")
@@ -343,17 +343,15 @@ def test_the_beam_tier_is_sound_until_it_is_loaded():
 
     bare_frame = build_frame(d, motor_mass=0.0, motor_inertia=(0.0, 0.0, 0.0))
     bare_err = abs(modal_solve(bare_frame, n_modes=6).frequencies[0] / solid(0.0) - 1.0)
-    assert bare_err < 0.05, (
-        f"bare structure disagrees by {100*bare_err:.1f}%; docs/06 S6.6 claims "
-        "under 1% and concludes the frame idealisation is sound"
+    assert bare_err < 0.12, (
+        f"bare structure disagrees by {100*bare_err:.1f}%. This one design used "
+        "to read 0.8%, which flattered the old model -- across 24 designs its "
+        "bare error was 10.1%, and the calibrated model is 7.5% out of sample."
     )
 
     loaded_err = abs(modal_solve(build_frame(d), n_modes=6).frequencies[0]
                      / solid(3.5e-4) - 1.0)
-    assert loaded_err > 0.25, (
-        f"loaded tiers now agree to {100*loaded_err:.1f}%; if the payload gap "
-        "has been closed, docs/06 S6.6 needs rewriting"
-    )
-    assert loaded_err > 10 * bare_err, (
-        "the point of this test is that the loaded error dwarfs the bare one"
+    assert loaded_err < 0.20, (
+        f"the loaded tiers differ by {100*loaded_err:.1f}%; the plate spoke "
+        "calibration brought this to ~15% and docs/06 S6.6 quotes it"
     )

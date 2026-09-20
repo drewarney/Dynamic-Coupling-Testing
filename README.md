@@ -35,21 +35,23 @@ most of it, which is a different claim and is measured in
 
 | | Tier 0 (beam) | Tier 1 (3D solid) | Tier 0 error |
 |---|---|---|---|
-| Optimised f₁ | 819.8 Hz | 1191.5 Hz | **−31.2%** |
-| Baseline f₁ | 244.6 Hz | 423.7 Hz | −42.3% |
+| Baseline f₁ | 372.6 Hz | 437.9 Hz | **−14.9%** |
+
+(Both tier-0 figures above are after the plate-stiffness calibration; before it
+the baseline read 244.6 Hz, −44.1%.)
 
 Two physical causes, both measured: leg slenderness (error correlates with
 `leg_thk` at r = −0.874; below L/d ≈ 4.5 beam theory stops representing a
 member) and plate aspect ratio (r = −0.780).
 
-**The plate correlation now has a mechanism, and it is narrower than "beam
-theory fails here".** Run the same mount with *no payload* and the two tiers
-agree to **0.8%** (beam 1262.2 Hz, 3D 1252.0 Hz) — the frame, legs and plate
-are all represented well. Adding the 350 g motor divides the beam tier's first
-frequency by 5.16x but the solid's by only 2.86x, because a point mass at the
-plate centre rests on four edge beams with no membrane action to resist it. The
-error is one missing piece of physics — the plate's local stiffness under a
-central mass — not a general failure of the idealisation. See
+**The plate correlation had a mechanism, and it has since been fixed.** The
+mount agreed far better unloaded than loaded, which pointed at how the payload
+was carried rather than at the frame. Four spokes reproduce a fraction of a
+plate's two-dimensional stiffness — measured against plate theory the
+idealisation was **11.4x too soft at the plate centre**, exactly where the motor
+sits. Calibrating one effective width against 24 mesh-converged 3D designs took
+the held-out loaded error from 40.8% to **13.7%** and the bare error from 10.1%
+to **7.5%**; the table above is *after* that fix. See
 [docs/06_MULTIFIDELITY.md](docs/06_MULTIFIDELITY.md) §6.6.
 
 **The optimiser converged to L/d = 4.00 — outside the beam tier's validated
@@ -69,9 +71,9 @@ objected.
 Partly, and the honest answer is measured rather than asserted — 24 designs per
 part, all tiers, held out against 3D truth:
 
-| beam → 3D, held out | uncorrected | scalar | GP on the log-ratio |
+| beam → 3D, held out | uncorrected | scalar | best correction |
 |---|---|---|---|
-| motor mount | 40.2% | 25.3% | **18.3%** |
+| motor mount | 24.4% | 20.4% | **16.5%** |
 | cantilever arm | 21.0% | 13.2% | **4.9%** |
 
 At equal solver-seconds the correction wins while fine-tier data is scarce and
@@ -79,8 +81,13 @@ stops mattering once it is not: the arm's fine-only GP overtakes it at 12 fine
 solves. Correcting the *coarse 3D* tier makes it worse — the discrepancy there
 (1.07%) is smaller than the noise a correction introduces.
 
-**18% is still not quotable**, so the 3D sign-off rule stands unchanged. Full
-results, method and the open questions: [docs/06_MULTIFIDELITY.md](docs/06_MULTIFIDELITY.md).
+**Still not quotable**, so the 3D sign-off rule stands unchanged.
+
+The more useful result came out of trying: the mount's beam tier had one
+missing stiffness term, and fixing it cut the uncorrected error from 40.2% to
+24.4% — shrinking what the correction had to do by two-thirds. *Fixing the
+physics beat learning the discrepancy.* Full results, method and the open
+questions: [docs/06_MULTIFIDELITY.md](docs/06_MULTIFIDELITY.md).
 
 ---
 

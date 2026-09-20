@@ -132,8 +132,41 @@ PLATE_WIDTH_FACTOR = 1.0  # placeholder, calibrated below
 
 #: Effective-width multiplier on the plate's *spoke* members (stiffness only).
 #:
-#: Placeholder; calibrated immediately below against 3D.
-PLATE_SPOKE_FACTOR = 1.0
+#: The spokes carry the payload into the plate, and four narrow strips in
+#: bending reproduce only a fraction of a plate's two-dimensional stiffness.
+#: Sized as the perimeter members were, they made the idealisation **11.4x too
+#: soft at the plate centre** -- which is where the motor sits, so it showed up
+#: as the whole of the beam tier's loaded error.
+#:
+#: The *form* comes from equating the four-spoke central stiffness to plate
+#: theory, which is why this is an effective width and not a stiffness fudge::
+#:
+#:     k_spokes = E * w * t^3 / L^3,   L = a / sqrt(2)      (four spokes)
+#:     k_plate  = c * D / a^2,         D = E t^3 / 12(1-nu^2)
+#:     =>  w   proportional to a
+#:
+#: so the effective width scales with the platform span, exactly as the code
+#: already assumed -- only the coefficient was wrong. Simply-supported plate
+#: theory (c = 1/0.0116) gives 5.7; the real plate is carried on four discrete
+#: leg tops rather than a continuous edge, which is softer, so the coefficient
+#: is calibrated rather than taken from the closed form.
+#:
+#: Calibrated against 24 mesh-converged 3D designs, bare and loaded, fitted on
+#: half and reported on the other half. Held-out first-frequency error:
+#:
+#:     ==========  ==========  ==========
+#:     factor      bare        loaded
+#:     ==========  ==========  ==========
+#:     1.0 (old)   10.1%       40.8%
+#:     2.5         7.5%        13.7%
+#:     ==========  ==========  ==========
+#:
+#: Both improve, so this is not a trade. Only this one constant is calibrated:
+#: PLATE_WIDTH_FACTOR stays 1.0, because fitting it too bought no held-out
+#: accuracy and a second fitted constant has to earn its place.
+#:
+#: See ``docs/06_MULTIFIDELITY.md`` S6.6 and ``tests/test_plate_calibration.py``.
+PLATE_SPOKE_FACTOR = 2.5
 
 #: How this part's modes group onto rigid-body motions of the payload.
 #:
@@ -286,10 +319,11 @@ class MotorMount(PartSpec):
     """
 
     name = "motor_mount"
-    # A four-leg frame carrying a plate is a weak beam idealisation: measured
-    # 1.735 at the default design (beam 244.6 Hz, 3D 424.4 Hz). This is the
-    # error the multi-fidelity correction exists to remove.
-    max_tier_ratio = 2.00
+    # Measured 1.175 at the default design (beam 372.6 Hz, 3D 437.9 Hz), down
+    # from 1.735 before the plate spokes were calibrated -- see
+    # PLATE_SPOKE_FACTOR. Tightened to match, because a bound loose enough to
+    # admit the old idealisation would no longer catch a modelling bug.
+    max_tier_ratio = 1.35
 
     def __init__(
         self,

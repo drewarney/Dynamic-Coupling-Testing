@@ -83,10 +83,16 @@ def test_correcting_the_coarse_tier_does_not_help(pairs, name):
 
 @pytest.mark.parametrize(
     "name,raw_lo,gp_hi",
-    [("motor_mount", 30.0, 25.0), ("cantilever_arm", 15.0, 8.0)],
+    [("motor_mount", 18.0, 20.0), ("cantilever_arm", 15.0, 8.0)],
 )
 def test_the_gp_correction_beats_the_scalar_on_the_beam_tier(pairs, name, raw_lo, gp_hi):
-    """docs/06 S6.3. Published: mount 40.23 -> 25.31 -> 18.27, arm 20.97 -> 13.21 -> 4.91."""
+    """docs/06 S6.3. Published: mount 24.42 -> 20.37 -> 16.96, arm 20.97 -> 13.21 -> 4.91.
+
+    The mount's figures moved when the plate spokes were calibrated: its
+    uncorrected error fell from 40.23% to 24.42%, and the correction's share of
+    the remaining gap fell with it. Fixing the physics beat learning the
+    discrepancy, which is the point docs/06 S6.6 now makes.
+    """
     space = get_part(name).design_space
     X, C, F = _arrays(pairs[name], "beam")
     te = np.arange(14, len(X))
@@ -105,7 +111,7 @@ def test_the_gp_correction_beats_the_scalar_on_the_beam_tier(pairs, name, raw_lo
 
 @pytest.mark.parametrize(
     "name,lo,hi",
-    [("motor_mount", 1.029, 4.170), ("cantilever_arm", 0.984, 1.173)],
+    [("motor_mount", 0.904, 2.630), ("cantilever_arm", 0.984, 1.173)],
 )
 def test_published_tier_ratio_ranges(pairs, name, lo, hi):
     """docs/06 S6.6 and architecture S1.5.3 both quote these ranges."""
