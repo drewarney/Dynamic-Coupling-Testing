@@ -103,7 +103,7 @@ def test_sobol_beats_random_coverage():
 def test_surrogate_interpolates_training_data(solver):
     """A noise-free GP must reproduce its own training points closely."""
     X = sobol_sample(SPACE, 24, seed=0)
-    F, mass, _, _ = _sample_dataset(solver, SPACE, X, 10, targets="family")
+    F, mass, _, _ = _sample_dataset(solver, SPACE, X, 10)
     ok = np.isfinite(mass)
     sur = FrequencySurrogate(SPACE, n_modes=F.shape[1]).fit(X[ok], F[ok], mass[ok])
     P = sur.predict(X[ok])
@@ -119,12 +119,12 @@ def test_surrogate_accuracy_on_held_out_data(solver):
     classification or tracking regresses.
     """
     X = sobol_sample(SPACE, 64, seed=1)
-    F, mass, _, cols = _sample_dataset(solver, SPACE, X, 10, targets="family")
+    F, mass, _, cols = _sample_dataset(solver, SPACE, X, 10)
     ok = np.isfinite(mass)
     sur = FrequencySurrogate(SPACE, n_modes=F.shape[1]).fit(X[ok], F[ok], mass[ok])
 
     Xt = sobol_sample(SPACE, 48, seed=99)
-    Ft, mt, _, _ = _sample_dataset(solver, SPACE, Xt, 10, targets="family")
+    Ft, mt, _, _ = _sample_dataset(solver, SPACE, Xt, 10)
     P = sur.predict(Xt)
     for j, name in enumerate(cols):
         m = np.isfinite(Ft[:, j]) & np.isfinite(P[:, j])
@@ -139,7 +139,7 @@ def test_surrogate_is_orders_of_magnitude_faster(solver):
     import time
 
     X = sobol_sample(SPACE, 24, seed=0)
-    F, mass, _, _ = _sample_dataset(solver, SPACE, X, 10, targets="family")
+    F, mass, _, _ = _sample_dataset(solver, SPACE, X, 10)
     ok = np.isfinite(mass)
     sur = FrequencySurrogate(SPACE, n_modes=F.shape[1]).fit(X[ok], F[ok], mass[ok])
 
@@ -157,7 +157,7 @@ def test_surrogate_is_orders_of_magnitude_faster(solver):
 
 def test_sensitivity_ranking_is_normalised(solver):
     X = sobol_sample(SPACE, 32, seed=0)
-    F, mass, _, _ = _sample_dataset(solver, SPACE, X, 10, targets="family")
+    F, mass, _, _ = _sample_dataset(solver, SPACE, X, 10)
     ok = np.isfinite(mass)
     sur = FrequencySurrogate(SPACE, n_modes=F.shape[1]).fit(X[ok], F[ok], mass[ok])
     rank = sur.sensitivity_ranking(1)
@@ -169,7 +169,7 @@ def test_sensitivity_ranking_is_normalised(solver):
 def test_active_learning_batch_is_diverse(solver):
     """Proposed points must be spread out, not piled on one hot spot."""
     X = sobol_sample(SPACE, 24, seed=0)
-    F, mass, _, _ = _sample_dataset(solver, SPACE, X, 10, targets="family")
+    F, mass, _, _ = _sample_dataset(solver, SPACE, X, 10)
     ok = np.isfinite(mass)
     sur = FrequencySurrogate(SPACE, n_modes=F.shape[1]).fit(X[ok], F[ok], mass[ok])
 

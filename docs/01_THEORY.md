@@ -54,10 +54,16 @@ $\sum_j M_{\text{eff},j} \to m_{\text{total}}$ as modes are retained, so the
 captured fraction tells you whether your modal truncation is honest. Aim for
 ≥ 90% in the excitation direction before trusting a mode-superposition FRF.
 
-## 2.3 Mode identity — the problem that decides whether the ML works
+## 2.3 Mode identity — a real problem, and not the one that mattered
 
 Frequencies come out of the eigensolver sorted by value. Sorted order is **not**
-mode identity. Three separate failure modes bite, in increasing subtlety:
+mode identity, and three separate failure modes bite when you need identity —
+comparing against a hammer test, diagnosing which mode to stiffen, reporting a
+result to an engineer.
+
+They are described here because they are real and the fixes are correct. They
+are *not* what the surrogate needed: §2.3.1 records the measurement that settled
+that, after this section had already been written as though they were.
 
 **(a) Mode crossing.** As geometry changes, "mode 3" switches from torsion to
 bending. Regressing $f_3$ against parameters teaches the surrogate a
@@ -89,7 +95,7 @@ reference design falls to 0.5–0.8 and the ordering of physical mode families
 flips outright. Continuation tracking fixes this along a path; a scattered DOE
 has no path.
 
-*Fix — the one this project uses:* stop matching shapes and ask what each mode
+*Fix — the one this project uses for reporting:* stop matching shapes and ask what each mode
 physically **does**. Project every mode onto the six rigid-body motions of the
 payload,
 
@@ -115,18 +121,70 @@ height/span ratio changes. A measured signature of $[0.66\,u_x,\ 0.66\,r_y]$ is 
 real mixed mode, not a classification failure — and deciding its label by argmax
 over two tied components is a coin flip.
 
-**This is not a cosmetic detail. Measured on the benchmark part:**
+**Measured on the benchmark part, per-column held-out MAPE:**
 
 | Target definition | Held-out MAPE |
 |---|---|
-| Frequency order, no tracking | diverges |
 | Vector MAC tracking | 33% |
 | Subspace-MAC cluster tracking | 31–103% |
 | Argmax rigid-body classification | 0.5–50% |
-| **Group-energy classification (this project)** | **0.52–1.97%** |
+| **Group-energy classification** | **0.52–1.97%** |
 
-Same solver, same GP, same DOE. The entire accuracy difference is the
-definition of the regression target.
+Same solver, same GP, same DOE. Among *labelled* targets, how you define the
+label is the whole accuracy difference.
+
+### 2.3.1 The labels turned out to be unnecessary
+
+The table above answers "which labelling scheme is most accurate". It does not
+answer "does the surrogate need labels at all", and the second question has the
+more useful answer.
+
+An earlier version of this section listed "frequency order, no tracking" as
+*diverging*. **That row was never measured.** It was an inference from the fact
+that modes cross — and it is wrong, for a reason that is standard spectral
+theory: the *k*-th smallest eigenvalue of a symmetric pencil is a **continuous**
+function of the matrix entries, hence of the design parameters. A crossing puts
+a kink in $f_{(k)}(x)$; it does not put a jump. Mode *identity* is discontinuous
+at a crossing. Mode *frequency in sorted order* is not, and a GP is fitting the
+latter.
+
+Measured properly — two unrelated parts, same DOE, same GP, scored on the
+FEA-verified objective of the design each target actually produces:
+
+| Target | Motor mount | Cantilever arm |
+|---|---|---|
+| **sorted frequencies** | **0.2628** | **0.2629** |
+| mode families | 0.2645 | 0.2632 |
+| subspace-MAC clusters | 0.2647 | 0.2632 |
+| objective scalars | 0.2703 | 0.2802 |
+
+Sorted order wins on both, and the mechanism is worth understanding because it
+generalises beyond this project:
+
+| Target | per-column nRMSE | objective nRMSE |
+|---|---|---|
+| sorted frequencies (arm) | 1.04% | **0.52%** |
+| mode families (arm) | **0.43%** | **48.01%** |
+
+**Per-column accuracy and objective accuracy rank oppositely.** Families are
+2.4× better at predicting their own columns and 92× worse at predicting the
+objective. The objective is a functional of the *whole* spectrum — the risk sum
+runs over every mode, the frequency floor is a minimum over every mode — so any
+mode the classifier labels `local` is invisible to the surrogate and fully
+visible to the truth. A complete, crude description beats a partial, precise
+one.
+
+The lesson is about validation rather than structural dynamics: **the metric you
+validate against decides which model you build.** Optimising per-column MAPE
+selected the labelled targets. Optimising the quantity the optimiser actually
+consumes selected the unlabelled ones, and would have done so before any of the
+classification machinery was written.
+
+What survives: the degenerate-eigenspace work in §2.4 is unaffected and still
+required — basis dependence there is a genuine physical-reproducibility bug, not
+a modelling preference. Mode classification remains the right way to *report* a
+finished design, because "the bounce mode is the problem" is what an engineer
+can act on. It is simply not needed to *find* that design.
 
 ## 2.4 Cross-modal coupling
 

@@ -32,7 +32,7 @@ def main() -> None:
           f"{discrepancy(space, X):.2e}")
 
     t0 = time.perf_counter()
-    F, mass, _, cols = _sample_dataset(solver, space, X, 10, targets="family")
+    F, mass, _, cols = _sample_dataset(solver, space, X, 10)
     t_fea = time.perf_counter() - t0
     print(f"[FEA] {N_TRAIN} solves in {t_fea:.1f} s "
           f"({t_fea/N_TRAIN*1e3:.1f} ms each)")
@@ -46,7 +46,7 @@ def main() -> None:
           f"{time.perf_counter()-t0:.1f} s")
 
     Xt = sobol_sample(space, N_TEST, seed=99)
-    Ft, mt, _, _ = _sample_dataset(solver, space, Xt, 10, targets="family")
+    Ft, mt, _, _ = _sample_dataset(solver, space, Xt, 10)
     P, S = sur.predict(Xt, return_std=True)
 
     print(f"\nHELD-OUT ACCURACY ({N_TRAIN} train / {N_TEST} test)")

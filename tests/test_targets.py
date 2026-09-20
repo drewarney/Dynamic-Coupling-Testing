@@ -239,3 +239,86 @@ def test_both_parts_support_every_tracking_free_target(objective):
                 solver, part.design_space, X, 10, targets=ts, objective=objective
             )
             assert np.isfinite(F).all(), f"{part.name} / {ts}"
+
+
+# ---------------------------------------------------------------------------
+# The measured verdict: sorted frequencies beat labelled ones
+# ---------------------------------------------------------------------------
+def test_default_target_is_raw():
+    """The default is a measured choice; changing it needs new measurements.
+
+    examples/07_target_comparison.py scored every target on the FEA-verified
+    objective of the design it produces, on two unrelated parts. Sorted
+    frequencies won both.
+    """
+    from dynopt.optimize.targets import RawTargets, make_target_set
+
+    assert isinstance(make_target_set(None, n_modes=6), RawTargets)
+
+
+def test_family_targets_discard_modes_the_objective_still_sees(objective):
+    """The mechanism behind the verdict, pinned cheaply.
+
+    Resonance risk sums over every mode and the frequency floor is a minimum
+    over every mode, so the objective is a functional of the whole spectrum.
+    Family columns are a *subset*: modes the classifier labels ``local`` never
+    reach the surrogate but are fully present in the truth. That gap is why
+    families predict their own columns better and the objective far worse.
+    """
+    part = MOTOR_MOUNT
+    solver = ReferenceFrameSolver(part)
+    space = part.design_space
+    fam = FamilyTargets(part.mode_families)
+
+    gaps = []
+    for x in sobol_sample(space, 12, seed=5):
+        res = solver.solve(space.to_dict(x), n_modes=12)
+        all_f = np.asarray(res.frequencies, dtype=float)
+        fam_f = np.array([v for v in fam.extract(res) if np.isfinite(v)])
+
+        assert fam_f.size < all_f.size, "fixture must have unlabelled modes"
+        gaps.append(abs(objective(fam_f, res.mass) - objective(all_f, res.mass)))
+
+    assert max(gaps) > 1e-6, (
+        "family columns reproduced the objective exactly -- if this ever holds, "
+        "the discarded modes carry no objective weight and the verdict may flip"
+    )
+
+
+def test_raw_predicts_the_objective_better_than_families(objective):
+    """Headline claim, owned: sorted targets beat labelled ones on the objective.
+
+    Not on per-column accuracy -- families win there, and that is the point.
+    Scored on the quantity the optimiser actually consumes.
+    """
+    part = MOTOR_MOUNT
+    solver = ReferenceFrameSolver(part)
+    space = part.design_space
+
+    Xtr = sobol_sample(space, 64, seed=1)
+    Xte = sobol_sample(space, 48, seed=99)
+    _, mtr, rtr, _ = _sample_dataset(solver, space, Xtr, 12, targets="raw")
+    _, mte, rte, _ = _sample_dataset(solver, space, Xte, 12, targets="raw")
+    true_J = np.array([objective(r.frequencies, m) for r, m in zip(rte, mte)])
+
+    err = {}
+    for name, ts in (("raw", RawTargets(6)), ("family", FamilyTargets(part.mode_families))):
+        F = extract_targets(rtr, ts, objective)
+        ok = np.isfinite(mtr)
+        sur = FrequencySurrogate(
+            space, n_modes=F.shape[1], transforms=ts.transforms
+        ).fit(Xtr[ok], F[ok], mtr[ok])
+        P, Pm = sur.predict(Xte), sur.predict_mass(Xte)
+        pred_J = np.array([
+            ts.objective_from(P[i], float(Pm[i]), objective) for i in range(len(Xte))
+        ])
+        good = np.isfinite(pred_J) & np.isfinite(true_J)
+        err[name] = float(
+            np.sqrt(np.mean((pred_J[good] - true_J[good]) ** 2)) / np.std(true_J[good])
+        )
+
+    assert err["raw"] < err["family"], (
+        f"objective nRMSE: raw {err['raw']:.3f} vs family {err['family']:.3f}. "
+        "The README and docs/01_THEORY.md §2.3.1 publish the opposite; "
+        "re-measure with examples/07_target_comparison.py and update both."
+    )

@@ -95,29 +95,59 @@ top of it (`tests/test_beam_validation.py`):
 
 ## The core technical result
 
-**Defining the surrogate's regression target is worth more than the choice of ML model.**
+**The metric you validate a surrogate against decides which surrogate you build.**
 
-Naively regressing frequencies in sorted eigenvalue order fails, for three
-compounding reasons: modes cross as geometry changes; symmetric structures have
-*degenerate* eigenvalues whose eigenvectors are an arbitrary rotation within the
-eigenspace; and over a wide design space the shapes drift so far that MAC
-against a reference design breaks down entirely.
+The obvious target is per-mode frequency, labelled so the columns keep their
+physical identity as geometry changes. That takes real machinery: modes cross,
+symmetric structures have degenerate eigenvalues whose eigenvectors are an
+arbitrary rotation within the eigenspace, and over a wide design space the
+shapes drift so far that MAC against a reference design breaks down. Classifying
+modes by rigid-body participation solves all of it and gets per-column error
+down to ~0.5%.
 
-The fix is to stop matching shapes and classify each mode by what it physically
-**does** — projecting onto the six rigid-body motions of the payload and scoring
-by *DOF group* rather than by individual component:
+It is also unnecessary. Measured against the plainest possible alternative —
+the *k* lowest frequencies in sorted order, no labels, no tracking — on two
+unrelated parts, same DOE, same GP, scored on the **FEA-verified objective of
+the design each one actually produces**:
 
-| Target definition | Held-out MAPE |
-|---|---|
-| Sorted frequency order | diverges |
-| Vector MAC tracking | 33% |
-| Subspace-MAC cluster tracking | 31–103% |
-| Argmax rigid-body classification | 0.5–50% |
-| **Group-energy classification** | **0.52–1.97%** |
+| Target | Motor mount | Cantilever arm |
+|---|---|---|
+| **sorted frequencies** | **0.2628** | **0.2629** |
+| mode families | 0.2645 | 0.2632 |
+| subspace-MAC clusters | 0.2647 | 0.2632 |
+| objective scalars | 0.2703 | 0.2802 |
 
-Same solver, same GP, same DOE. Detail in [`docs/01_THEORY.md`](docs/01_THEORY.md) §2.3.
+Sorted order wins on both. The reason is not accuracy — families predict *their
+own columns* 2–3× better:
 
-### Surrogate performance (128 train / 200 test)
+| Target | per-column nRMSE | **objective nRMSE** |
+|---|---|---|
+| sorted frequencies (arm) | 1.04% | **0.52%** |
+| mode families (arm) | **0.43%** | **48.01%** |
+
+**The ranking inverts.** On the arm, families are 2.4× more accurate per column
+and 92× worse at predicting the objective. The objective reads the *whole*
+spectrum — resonance risk sums over every mode, and the frequency floor is a
+minimum over every mode — so a mode the classifier discards as `local` is
+invisible to the surrogate and fully visible to the truth. Describing every mode
+crudely beats naming a few precisely.
+
+> **Correction.** An earlier version of this table claimed sorted-frequency
+> targets "diverge". That row was never measured. Ordered eigenvalues of a
+> symmetric pencil are *continuous* in the design parameters — a crossing kinks
+> `f₍ₖ₎(x)`, it does not break it — and a GP fits that without difficulty. The
+> 33% figure cited as justification came from vector-MAC tracking, which is
+> genuinely poor; sorted order was never in that comparison.
+
+Sorted frequencies are now the default. Mode classification is retained for
+**reporting** a finished design, where naming the offending mode is exactly what
+an engineer wants. Reproduce with
+[`examples/07_target_comparison.py`](examples/07_target_comparison.py).
+
+### Surrogate performance
+
+Mode-family columns, 128 train / 200 test — still the most accurate *per-column*
+predictions, and what the reporting path uses:
 
 | Target | MAPE | p95 | 2σ coverage |
 |---|---|---|---|
@@ -188,7 +218,7 @@ A MATLAB implementation of the same loop is in [`matlab/`](matlab/).
 | Doc | Contents |
 |---|---|
 | [`docs/00_ARCHITECTURE.md`](docs/00_ARCHITECTURE.md) | Python vs MATLAB stack comparison; exact API hooks; licensing |
-| [`docs/01_THEORY.md`](docs/01_THEORY.md) | Element matrices, participation, MAC, coupling, objective formulation |
+| [`docs/01_THEORY.md`](docs/01_THEORY.md) | Element matrices, participation, MAC, coupling, objective formulation; §2.3.1 on why the surrogate does not need mode labels |
 | [`docs/02_ROADMAP.md`](docs/02_ROADMAP.md) | Phase-by-phase plan with acceptance tests and failure modes |
 | [`docs/03_BENCHMARK.md`](docs/03_BENCHMARK.md) | Benchmark spec, results, **physical validation protocol** |
 | [`docs/04_COMMERCIALIZATION.md`](docs/04_COMMERCIALIZATION.md) | Resume framing; honest SaaS assessment |

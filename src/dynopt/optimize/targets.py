@@ -117,8 +117,29 @@ class RawTargets(TargetSet):
     the pathological choice it is often assumed to be: a crossing puts a kink in
     :math:`f_{(k)}(x)`, not a jump. The one real discontinuity is at the top of
     the window, where the :math:`(k{+}1)`-th mode can drop below the
-    :math:`k`-th and shift the list; request a couple more modes than you
-    regress to keep that away from the columns you use.
+    :math:`k`-th and shift the list; **solve for more modes than you regress**
+    (12 and 6 in the benchmark) to keep that away from the columns you use.
+
+    **This is the default, on measured evidence.** Against mode families on two
+    unrelated parts, same DOE and same GP, end-to-end FEA-verified objective:
+
+    ======================  =============  =================
+    target                   motor mount    cantilever arm
+    ======================  =============  =================
+    ``RawTargets``           **0.2628**     **0.2629**
+    ``FamilyTargets``        0.2645         0.2632
+    ``ClusterTargets``       0.2647         0.2632
+    ``ScalarTargets``        0.2703         0.2802
+    ======================  =============  =================
+
+    The reason is not that sorted frequencies are more accurate -- families
+    predict *their own columns* 2-3x better. It is that the objective reads the
+    whole spectrum: ``risk`` sums over every mode and ``f_min`` is a minimum
+    over every mode, so a mode the classifier discards as ``local`` is invisible
+    to the surrogate and fully visible to the truth. Objective error inverts the
+    per-column ranking -- on the arm, families are 2.4x better per column and
+    92x worse on the objective. Describing every mode crudely beats naming a few
+    precisely.
     """
 
     def __init__(self, k: int = 6):
@@ -232,12 +253,13 @@ class ClusterTargets(TargetSet):
 def make_target_set(spec_or_name, n_modes: int = 6, part=None) -> TargetSet:
     """Resolve a :class:`TargetSet`, a name, or ``None`` into a target set.
 
-    Names map to ``"family"``, ``"raw"``, ``"scalars"`` and ``"cluster"`` so
-    existing callers keep working.
+    Names map to ``"family"``, ``"raw"``, ``"scalars"`` and ``"cluster"``.
+    ``None`` selects ``"raw"``, the measured default -- see
+    ``examples/07_target_comparison.py``.
     """
     if isinstance(spec_or_name, TargetSet):
         return spec_or_name
-    name = spec_or_name or "family"
+    name = spec_or_name or "raw"
     if name == "raw":
         return RawTargets(n_modes)
     if name in ("scalars", "scalar", "risk"):

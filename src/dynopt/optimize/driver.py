@@ -118,7 +118,7 @@ def _sample_dataset(
     space: DesignSpace,
     X: np.ndarray,
     n_modes: int,
-    targets: str | TargetSet = "family",
+    targets: str | TargetSet = "raw",
     verbose: bool = False,
     rtol: float = 0.02,
     min_purity: float = 0.35,
@@ -128,9 +128,13 @@ def _sample_dataset(
     """Run FEA over a design matrix and build continuous regression targets.
 
     ``targets`` is a :class:`dynopt.optimize.targets.TargetSet`, or one of the
-    names ``"family"``, ``"raw"``, ``"scalars"``, ``"cluster"``. See that module
-    for what each costs and requires; the choice is consequential enough that it
-    is worth measuring rather than assuming.
+    names ``"raw"`` (default), ``"family"``, ``"scalars"``, ``"cluster"``.
+
+    ``"raw"`` is the default on measured evidence, not preference: it produced
+    the best FEA-verified objective on both benchmark parts. ``"family"`` gives
+    physically named columns and is better for *reporting* a design, but it
+    discards modes the objective still sees. See
+    ``examples/07_target_comparison.py``.
 
     The solved results come back alongside the targets, so switching target type
     or changing the excitation bands is a re-extract, never a re-solve.
@@ -223,7 +227,7 @@ def optimize_surrogate(
     objective: ResonanceObjective,
     n_train: int = 200,
     n_modes: int = 6,
-    targets: str = "family",
+    targets: str = "raw",
     seed: int = 0,
     verbose: bool = True,
 ) -> OptimizationResult:
@@ -275,7 +279,7 @@ def optimize_adaptive(
     n_rounds: int = 8,
     n_per_round: int = 4,
     n_modes: int = 6,
-    targets: str = "family",
+    targets: str = "raw",
     seed: int = 0,
     verbose: bool = True,
 ) -> OptimizationResult:
