@@ -10,46 +10,67 @@ import warnings
 import numpy as np
 
 
-def _solver_and_space(args):
-    from dynopt.fea.reference import ReferenceFrameSolver
-    from dynopt.geometry import MOTOR_MOUNT_SPACE, build_frame
+def get_part(name: str):
+    """Resolve a part from the registry, as a CLI-friendly error."""
+    from dynopt.geometry import get_part as _get
 
+    try:
+        return _get(name)
+    except KeyError as exc:
+        raise SystemExit(str(exc)) from None
+
+
+def _solver_for(args, part):
+    """Build the requested backend for a part."""
     if args.backend == "reference":
-        return ReferenceFrameSolver(build_frame), MOTOR_MOUNT_SPACE
+        from dynopt.fea.reference import ReferenceFrameSolver
+
+        if not part.has_frame:
+            raise SystemExit(f"part {part.name!r} has no frame tier; try --backend calculix")
+        return ReferenceFrameSolver(part)
     if args.backend == "calculix":
         from dynopt.fea.calculix import CalculiXConfig, CalculiXSolver
-        from dynopt.geometry import MotorMountCAD
 
-        return CalculiXSolver(MotorMountCAD(), CalculiXConfig()), MOTOR_MOUNT_SPACE
+        return CalculiXSolver(part, CalculiXConfig())
     if args.backend == "ansys":
         from dynopt.fea.pyansys import MapdlConfig, MapdlSolver
-        from dynopt.geometry import MotorMountCAD
 
-        return MapdlSolver(MotorMountCAD(), MapdlConfig()), MOTOR_MOUNT_SPACE
+        return MapdlSolver(part, MapdlConfig())
     raise SystemExit(f"unknown backend {args.backend!r}")
+
+
+def _payload_dof(res, direction: int = 0) -> int:
+    """A global DOF at the payload -- where a CLI demo should poke the structure."""
+    payload = res.meta.get("payload_nodes") or [0]
+    return int(payload[0]) * 6 + direction
 
 
 def cmd_modal(args) -> int:
     from dynopt.dynamics import classify_modes, family_frequencies
-    from dynopt.fea.reference import modal_solve
-    from dynopt.geometry import build_frame, motor_node_index
 
-    _, space = _solver_and_space(args)
-    params = space.to_dict(space.defaults)
+    part = get_part(args.part)
+    solver = _solver_for(args, part)
+    params = part.design_space.to_dict(part.design_space.defaults)
     if args.params:
         params.update(json.loads(args.params))
 
-    model = build_frame(params)
-    res = modal_solve(model, n_modes=args.modes)
-    origin = model.nodes[motor_node_index()]
-    labels = classify_modes(res, origin, 0.35)
+    res = solver.solve(params, n_modes=args.modes)
+    print(f"part: {part.name}    mass: {res.mass*1000:.1f} g")
 
-    print(f"mass: {res.mass*1000:.1f} g")
+    spec = part.mode_families
+    origin = part.classification_origin(res)
+    labels = (
+        classify_modes(res, origin, spec, 0.35)
+        if spec is not None and res.modes is not None
+        else [""] * res.n_modes
+    )
     for i, (f, lab) in enumerate(zip(res.frequencies, labels), start=1):
         print(f"  mode {i:2d}  {f:9.2f} Hz  {lab}")
-    print("\nfamilies:")
-    for k, v in family_frequencies(res, origin).items():
-        print(f"  {k:<14s} {v:9.2f} Hz" if np.isfinite(v) else f"  {k:<14s}     --")
+
+    if spec is not None and res.modes is not None:
+        print("\nfamilies:")
+        for k, v in family_frequencies(res, origin, spec).items():
+            print(f"  {k:<14s} {v:9.2f} Hz" if np.isfinite(v) else f"  {k:<14s}     --")
     return 0
 
 
@@ -57,7 +78,8 @@ def cmd_doe(args) -> int:
     from dynopt.doe import sobol_sample
     from dynopt.optimize.driver import _sample_dataset
 
-    solver, space = _solver_and_space(args)
+    part = get_part(args.part)
+    solver, space = _solver_for(args, part), part.design_space
     X = sobol_sample(space, args.n, seed=args.seed)
     F, mass, _, cols = _sample_dataset(solver, space, X, args.modes, verbose=True)
 
@@ -71,14 +93,13 @@ def cmd_doe(args) -> int:
 
 def cmd_coupling(args) -> int:
     from dynopt.dynamics import coupled_pairs, discrete_damper_matrix
-    from dynopt.fea.reference import modal_solve
-    from dynopt.geometry import build_frame, motor_node_index
 
-    _, space = _solver_and_space(args)
-    model = build_frame(space.to_dict(space.defaults))
-    res = modal_solve(model, n_modes=args.modes)
-    node = motor_node_index()
-    C = discrete_damper_matrix(model.n_dof, [(node * 6 + 0, args.damping)])
+    part = get_part(args.part)
+    solver = _solver_for(args, part)
+    space = part.design_space
+    res = solver.solve(space.to_dict(space.defaults), n_modes=args.modes)
+    n_dof = res.meta.get("n_dof") or (res.modes.shape[0] if res.modes is not None else 0)
+    C = discrete_damper_matrix(n_dof, [(_payload_dof(res, 0), args.damping)])
 
     pairs = coupled_pairs(res, C, threshold=args.threshold)
     print(f"{len(pairs)} coupled pairs above eta={args.threshold}")
@@ -96,7 +117,8 @@ def cmd_optimize(args) -> int:
         rpm_bands,
     )
 
-    solver, space = _solver_and_space(args)
+    part = get_part(args.part)
+    solver, space = _solver_for(args, part), part.design_space
     bands = rpm_bands(args.rpm_lo, args.rpm_hi, orders=tuple(args.orders))
     obj = ResonanceObjective(
         bands=bands, margin=args.margin, w_mass=args.w_mass,
@@ -133,12 +155,10 @@ def cmd_optimize(args) -> int:
         print(f"saved {args.out}")
 
     if args.step:
-        from dynopt.geometry import MotorMountCAD
-
         try:
-            MotorMountCAD().export_step(res.params, args.step)
+            part.export_step(res.params, args.step)
             print(f"exported {args.step}")
-        except ImportError as exc:
+        except (ImportError, NotImplementedError) as exc:
             print(f"STEP export skipped: {exc}", file=sys.stderr)
     return 0
 
@@ -151,6 +171,10 @@ def main(argv: list[str] | None = None) -> int:
     common.add_argument("--backend", default="reference",
                         choices=["reference", "calculix", "ansys"])
     common.add_argument("--modes", type=int, default=10)
+    from dynopt.geometry import PART_NAMES
+
+    common.add_argument("--part", default=PART_NAMES[0],
+                        help=f"which part to work on ({', '.join(PART_NAMES)})")
 
     p = argparse.ArgumentParser(prog="dynopt", description=__doc__, parents=[common])
     sub = p.add_subparsers(dest="cmd", required=True)

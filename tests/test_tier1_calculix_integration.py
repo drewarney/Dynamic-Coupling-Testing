@@ -40,7 +40,7 @@ from dynopt.fea.calculix import (  # noqa: E402
     count_volumes,
     mesh_step,
 )
-from dynopt.geometry import MOTOR_MOUNT_SPACE, MotorMountCAD  # noqa: E402
+from dynopt.geometry import MOTOR_MOUNT, MOTOR_MOUNT_SPACE  # noqa: E402
 
 SPACE = MOTOR_MOUNT_SPACE
 
@@ -59,7 +59,7 @@ def _cfg(**kw):
 @pytest.fixture(scope="module")
 def step_file(tmp_path_factory):
     path = tmp_path_factory.mktemp("tier1") / "mount.step"
-    MotorMountCAD().export_step(SPACE.to_dict(SPACE.defaults), str(path))
+    MOTOR_MOUNT.export_step(SPACE.to_dict(SPACE.defaults), str(path))
     return str(path)
 
 
@@ -79,7 +79,7 @@ def test_cad_produces_single_contiguous_volume(step_file):
 
 def test_part_has_flat_mounting_face_at_origin(step_file, tmp_path):
     """Nothing may hang below z = 0, and real area must sit on that plane."""
-    solid = MotorMountCAD().build(SPACE.to_dict(SPACE.defaults))
+    solid = MOTOR_MOUNT.build(SPACE.to_dict(SPACE.defaults))
     bb = solid.val().BoundingBox()
     assert bb.zmin == pytest.approx(0.0, abs=1e-6), (
         f"geometry extends to z={bb.zmin:.3f}; there is no flat bolt-down face"
@@ -148,7 +148,7 @@ def test_empty_node_selection_raises(step_file, tmp_path):
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="module")
 def tier1_result(step_file):
-    return CalculiXSolver(MotorMountCAD(), _cfg()).solve(
+    return CalculiXSolver(MOTOR_MOUNT, _cfg()).solve(
         SPACE.to_dict(SPACE.defaults), n_modes=6
     )
 
@@ -206,7 +206,7 @@ def test_cad_valid_across_design_space(seed, tmp_path):
         params = SPACE.to_dict(x)
         path = tmp_path / f"d{seed}_{i}.step"
         try:
-            solid = MotorMountCAD().build(params)
+            solid = MOTOR_MOUNT.build(params)
             bb = solid.val().BoundingBox()
             cq.exporters.export(solid, str(path))
             n_vol = count_volumes(str(path))
@@ -253,7 +253,7 @@ def test_designs_are_meshable_not_merely_valid(tmp_path):
         params = SPACE.to_dict(x)
         path = tmp_path / f"m{i}.step"
         try:
-            MotorMountCAD().export_step(params, str(path))
+            MOTOR_MOUNT.export_step(params, str(path))
             coords, _ = mesh_step(str(path), str(tmp_path / f"m{i}.inp"), _cfg())
             if coords.shape[0] < 500:
                 failures.append(f"design {i}: only {coords.shape[0]} nodes")

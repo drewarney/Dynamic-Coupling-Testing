@@ -14,7 +14,7 @@ import numpy as np
 
 from dynopt.dynamics import classify_modes, family_frequencies
 from dynopt.fea.reference import ReferenceFrameSolver, modal_solve
-from dynopt.geometry import MOTOR_MOUNT_SPACE, build_frame, motor_node_index
+from dynopt.geometry import MOTOR_MOUNT
 from dynopt.optimize import (
     ResonanceObjective,
     evaluate_baseline,
@@ -28,10 +28,11 @@ RPM_LO, RPM_HI = 1000.0, 6000.0
 
 
 def describe(params, title):
-    model = build_frame(params)
-    res = modal_solve(model, n_modes=12)
-    origin = model.nodes[motor_node_index()]
-    fams = family_frequencies(res, origin)
+    part = MOTOR_MOUNT
+    res = modal_solve(part.build_frame(params), n_modes=12)
+    fams = family_frequencies(
+        res, part.classification_origin(res), part.mode_families
+    )
     print(f"\n{title}")
     print(f"  mass {res.mass*1000:7.1f} g")
     for k, v in fams.items():
@@ -45,8 +46,9 @@ def main() -> None:
                                    "for examples/06_tier1_signoff.py")
     args = ap.parse_args()
 
-    space = MOTOR_MOUNT_SPACE
-    solver = ReferenceFrameSolver(build_frame)
+    part = MOTOR_MOUNT
+    space = part.design_space
+    solver = ReferenceFrameSolver(part)
     bands = rpm_bands(RPM_LO, RPM_HI, orders=(1.0, 2.0, 4.0))
 
     print("=" * 66)
@@ -78,9 +80,10 @@ def main() -> None:
     print(result.report())
 
     print("\nVERIFICATION -- every mode vs every excitation band")
-    model = build_frame(result.params)
-    res = modal_solve(model, n_modes=12)
-    labels = classify_modes(res, model.nodes[motor_node_index()], 0.35)
+    res = modal_solve(part.build_frame(result.params), n_modes=12)
+    labels = classify_modes(
+        res, part.classification_origin(res), part.mode_families, 0.35
+    )
     ok = True
     for f, lab in zip(res.frequencies[:6], labels[:6]):
         worst = min(b.separation(f) for b in bands)

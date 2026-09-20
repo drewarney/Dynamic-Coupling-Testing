@@ -44,10 +44,10 @@ def main(argv):
 
     from dynopt.fea.calculix import CalculiXConfig, CalculiXSolver
     from dynopt.fea.reference import modal_solve
-    from dynopt.geometry import MOTOR_MOUNT_SPACE, MotorMountCAD, build_frame
+    from dynopt.geometry import MOTOR_MOUNT, build_frame
     from dynopt.optimize import rpm_bands
 
-    space = MOTOR_MOUNT_SPACE
+    space = MOTOR_MOUNT.design_space
     if len(argv) > 1:
         params = json.load(open(argv[1]))["params"]
     else:
@@ -55,7 +55,7 @@ def main(argv):
         print("no design file given; signing off the BASELINE design\n")
 
     bands = rpm_bands(RPM_LO, RPM_HI, orders=ORDERS)
-    cad = MotorMountCAD()
+    cad = MOTOR_MOUNT
 
     print("=" * 70)
     print("  TIER 1 SIGN-OFF -- 3D solid verification")

@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 
 from dynopt.dynamics import (
-    MODE_FAMILIES,
     canonicalize_degenerate_basis,
     classify_modes,
     cluster_modes,
@@ -21,7 +20,14 @@ from dynopt.dynamics import (
     subspace_mac,
 )
 from dynopt.fea.reference import MATERIALS, FrameModel, Section, modal_solve
-from dynopt.geometry import MOTOR_MOUNT_SPACE, build_frame, motor_node_index
+from dynopt.geometry import (  # noqa: E402
+    MODE_FAMILIES,
+    MOTOR_MOUNT,
+    MOTOR_MOUNT_FAMILIES,
+    MOTOR_MOUNT_SPACE,
+    build_frame,
+    motor_node_index,
+)
 
 
 @pytest.fixture(scope="module")
@@ -68,7 +74,7 @@ def test_degenerate_modes_are_clustered(mount):
 def test_mode_classification_covers_all_families(mount):
     """Every physical family must be identified on the benchmark part."""
     _, res, origin = mount
-    fams = family_frequencies(res, origin)
+    fams = family_frequencies(res, origin, MOTOR_MOUNT_FAMILIES)
     for key in MODE_FAMILIES:
         assert np.isfinite(fams[key]), f"{key} not found in {fams}"
     assert fams["sway_rock_1"] <= fams["sway_rock_2"]
@@ -81,7 +87,9 @@ def test_classification_is_stable_across_designs():
     for x in sobol_sample(MOTOR_MOUNT_SPACE, 16, seed=3):
         model = build_frame(MOTOR_MOUNT_SPACE.to_dict(x))
         res = modal_solve(model, n_modes=12)
-        fams = family_frequencies(res, model.nodes[motor_node_index()])
+        fams = family_frequencies(
+            res, model.nodes[motor_node_index()], MOTOR_MOUNT_FAMILIES
+        )
         assert np.isfinite(fams["bounce_z"])
         assert np.isfinite(fams["sway_rock_1"])
 
@@ -301,3 +309,34 @@ def test_coupling_index_is_basis_invariant(mount):
         if ref is None:
             ref = val
         assert np.allclose(val, ref, atol=1e-8)
+
+
+def test_published_coupling_figure_is_current(mount):
+    """Pin the headline coupling number to what the code actually produces.
+
+    This figure went stale once already: it was measured, published, and then
+    invalidated two commits later by a plate-mass recalibration that moved a
+    mode from 555.7 to 600.1 Hz. Nothing failed, because no test owned the
+    number. This test owns it -- if the physics moves, it fails here rather
+    than quietly contradicting the README.
+
+    Update the bound and the docs together, or not at all.
+    """
+    model, res, _ = mount
+    node = motor_node_index()
+    C = discrete_damper_matrix(model.n_dof, [(node * 6 + 0, 180.0), (node * 6 + 4, 6.0)])
+    F = np.zeros(model.n_dof)
+    F[node * 6 + 0] = 1.0
+    freqs = np.linspace(100.0, 1500.0, 600)
+    out = [node * 6 + 0]
+
+    Hc = modal_frf(res, C, freqs, F, dofs_out=out, keep_coupling=True)[0]
+    Hu = modal_frf(res, C, freqs, F, dofs_out=out, keep_coupling=False)[0]
+    rms_c = float(np.sqrt(np.trapezoid(np.abs(Hc) ** 2, freqs)))
+    rms_u = float(np.sqrt(np.trapezoid(np.abs(Hu) ** 2, freqs)))
+    err = 100.0 * (rms_u - rms_c) / rms_c
+
+    assert -24.0 < err < -21.0, (
+        f"band RMS coupling error is {err:.1f}%, but the docs publish -22.6%. "
+        "Re-measure and update README.md and docs/ in the same commit."
+    )

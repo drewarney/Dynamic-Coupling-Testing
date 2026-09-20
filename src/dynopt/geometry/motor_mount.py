@@ -30,7 +30,8 @@ from __future__ import annotations
 import numpy as np
 
 from ..fea.reference import MATERIALS, FrameModel, Material, Section
-from .base import DesignSpace, DesignVariable, ParametricModel
+from ..dynamics.modal import ModeFamilySpec
+from .base import DesignSpace, DesignVariable, PartSpec
 
 #: Design space for the benchmark motor mount, all dimensions in metres.
 MOTOR_MOUNT_SPACE = DesignSpace(
@@ -128,6 +129,23 @@ def plate_geometry(params: dict[str, float], motor_dia: float = 0.028) -> dict:
 #: Calibrated against mesh-converged 3D CalculiX solves; see
 #: ``examples/05_cross_solver_validation.py``.
 PLATE_WIDTH_FACTOR = 1.0  # placeholder, calibrated below
+
+#: How this part's modes group onto rigid-body motions of the payload.
+#:
+#: ``sway_rock`` deliberately merges the two lateral translations with the two
+#: rocking rotations. On a payload carried by compliant legs these are **not**
+#: separable: they are inertially coupled through the payload's CG offset,
+#: producing two mixed branches whose character swaps as the height/span ratio
+#: changes. A mode signature of ``[0.66 ux, 0.66 ry]`` is a real mixed mode, and
+#: deciding its label by argmax over two tied components is a coin flip that
+#: injects ~50% noise into the surrogate target. One family, two branches.
+MOTOR_MOUNT_FAMILIES = ModeFamilySpec(
+    dofs={"bounce_z": (2,), "sway_rock": (0, 1, 3, 4), "torsion_z": (5,)},
+    branches={"bounce_z": 1, "sway_rock": 2, "torsion_z": 1},
+)
+
+#: Target column names for this part, in order.
+MODE_FAMILIES = MOTOR_MOUNT_FAMILIES.columns
 
 #: Non-structural payload carried at the platform centre.
 DEFAULT_MOTOR_MASS = 0.35  # kg
@@ -243,22 +261,67 @@ def motor_node_index(n_seg: int = 4) -> int:
     return 4 * (n_seg + 1)
 
 
-class MotorMountCAD(ParametricModel):
-    """CadQuery solid model of the same part, exported to STEP.
+class MotorMount(PartSpec):
+    """The benchmark part, as a self-contained :class:`PartSpec`.
 
-    Imported lazily so the package stays usable without the (large) CadQuery /
-    OCP dependency -- the reference tier needs only numpy and scipy.
+    Supplies both tiers: a frame idealisation for fast DOE work and a CadQuery
+    solid for 3D verification. Everything the pipeline knows about this part
+    lives in this module -- the core carries no reference to it.
+
+    CadQuery is imported lazily so the package stays usable without the (large)
+    OCP dependency; the frame tier needs only numpy and scipy.
     """
 
-    def __init__(self, motor_dia: float = 0.028, bolt_dia: float = 0.004):
+    name = "motor_mount"
+
+    def __init__(
+        self,
+        motor_dia: float = 0.028,
+        bolt_dia: float = 0.004,
+        material: str = "AL6061",
+        motor_mass: float = DEFAULT_MOTOR_MASS,
+        motor_inertia: tuple[float, float, float] = DEFAULT_MOTOR_INERTIA,
+    ):
         self.motor_dia = motor_dia
         self.bolt_dia = bolt_dia
+        self.material = material
+        self.motor_mass = motor_mass
+        self.motor_inertia = motor_inertia
 
     @property
     def design_space(self) -> DesignSpace:
         return MOTOR_MOUNT_SPACE
 
-    def build(self, params: dict[str, float]):
+    @property
+    def mode_families(self) -> ModeFamilySpec:
+        return MOTOR_MOUNT_FAMILIES
+
+    def build_frame(self, params: dict[str, float]) -> FrameModel:
+        return build_frame(
+            params,
+            material=self.material,
+            motor_mass=self.motor_mass,
+            motor_inertia=self.motor_inertia,
+        )
+
+    def solver_hints(self, params: dict[str, float]) -> dict:
+        """Clamp the named mounting plane, and smear the motor over its flange.
+
+        ``z_plane`` rather than "lowest face": design variables move geometry
+        around, and a lowest-face selector will happily clamp four isolated leg
+        tips instead of the bolt-down faces, then solve and report nonsense.
+        """
+        geom = plate_geometry(params, self.motor_dia)
+        return {
+            "fix_selector": "z_plane",
+            "fix_plane": 0.0,
+            "fix_tol": 1e-3,
+            # mm / tonne / s, matching the mm geometry CadQuery exports
+            "payload_mass": self.motor_mass * 1e-3,
+            "payload_radius": max(geom["hole_radius"] * 1000.0 * 1.6, 8.0),
+        }
+
+    def build_cad(self, params: dict[str, float]):
         try:
             import cadquery as cq
         except ImportError as exc:  # pragma: no cover - optional dependency
@@ -355,12 +418,21 @@ class MotorMountCAD(ParametricModel):
         )
         return result.cut(below).cut(above)
 
-    def export_step(self, params: dict[str, float], path: str) -> str:
-        import cadquery as cq  # noqa: F401  (validated in build)
+    #: Back-compatible alias: earlier code and the examples call ``build()``.
+    build = build_cad
 
-        solid = self.build(params)
-        cq.exporters.export(solid, path)
+    def export_step(self, params: dict[str, float], path: str) -> str:
+        import cadquery as cq  # noqa: F401  (validated in build_cad)
+
+        cq.exporters.export(self.build_cad(params), path)
         return path
+
+
+#: The part, ready to hand to a solver.
+MOTOR_MOUNT = MotorMount()
+
+#: Back-compatible alias from when this class was CAD-only.
+MotorMountCAD = MotorMount
 
 
 #: Leg slenderness (L/d) below which Euler-Bernoulli/Timoshenko beam theory

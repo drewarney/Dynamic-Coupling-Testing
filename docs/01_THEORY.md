@@ -146,14 +146,14 @@ $\max|\kappa_{ij}| \approx 4\times10^{-13}$ — decoupled to machine precision.
 $$\tilde{C} = \Phi^T C \Phi, \qquad
 \kappa_{ij} = \frac{|\tilde{C}_{ij}|}{\sqrt{\tilde{C}_{ii}\tilde{C}_{jj}}}$$
 
-A single grounded dashpot at the payload gives $\max\kappa = 0.70$.
+A single grounded dashpot at the payload gives $\max\kappa = 0.62$.
 
 **A trap that invalidates this whole section if missed.** Eigenvectors of a
 *repeated* eigenvalue are defined only up to a rotation within their eigenspace,
 and different LAPACK builds return different rotations. Both $\kappa_{ij}$
 between degenerate modes and the act of zeroing off-diagonal terms are
 **not invariant** under that rotation. Measured on the benchmark mount, the same
-deterministic code reported anywhere from $-1.5\%$ to $-29.9\%$ for the
+deterministic code reported anywhere from $-1.5\%$ to $-22.6\%$ for the
 "error from ignoring coupling" across valid bases of one eigensolution — and
 macOS (Accelerate) and Linux (OpenBLAS) genuinely disagreed.
 
@@ -205,8 +205,8 @@ $$\tilde{H}(\omega) = \Phi[\Omega^2 + i\omega\tilde{C} - \omega^2 I]^{-1}\Phi^T$
 
 The off-diagonal terms of $\tilde{C}$ are **kept** and the small (10–30 DOF)
 system solved directly. Zeroing them is the textbook uncoupled-SDOF assumption;
-on the benchmark part it understates band RMS response by **29.9%** and peak
-response by **49.4%**.
+on the benchmark part it understates band RMS response by **22.6%** and peak
+response by **38.7%**.
 
 Band-limited RMS, the scalar the optimiser can minimise:
 

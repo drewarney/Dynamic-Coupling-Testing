@@ -20,12 +20,13 @@ from dynopt.dynamics import (
     rms_response,
 )
 from dynopt.fea.reference import modal_solve
-from dynopt.geometry import MOTOR_MOUNT_SPACE, build_frame, motor_node_index
+from dynopt.geometry import MOTOR_MOUNT, motor_node_index
 
 
 def main() -> None:
-    space = MOTOR_MOUNT_SPACE
-    model = build_frame(space.to_dict(space.defaults))
+    part = MOTOR_MOUNT
+    space = part.design_space
+    model = part.build_frame(space.to_dict(space.defaults))
     res = modal_solve(model, n_modes=10)
     node = motor_node_index()
 

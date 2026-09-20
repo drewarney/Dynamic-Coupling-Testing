@@ -8,6 +8,8 @@ quantities here turn a raw eigensolution into *actionable risk*.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 import numpy as np
 import scipy.sparse as sp
 
@@ -262,52 +264,68 @@ def track_modes_robust(
 # Physics-based mode classification
 # ---------------------------------------------------------------------------
 # Shape tracking against a fixed reference design breaks down over a *wide*
-# design space.  When the base half-span ranges 40-120 mm and the height
-# 30-100 mm, the mode shapes themselves change so much that MAC against the
-# reference geometry falls to 0.5-0.8 and the ordering of the physical mode
-# families flips: at one design the vertical bounce mode is lowest, at another a
-# lateral pair is.  Continuation tracking fixes this along a *path*, but a
-# scattered DOE has no path.
+# design space.  Once a dimension varies by 2-3x, the mode shapes themselves
+# change so much that MAC against the reference geometry falls to 0.5-0.8, and
+# the ordering of the physical mode families flips outright: the family that was
+# lowest at one design is third at another.  Continuation tracking fixes this
+# along a *path*, but a scattered DOE has no path.
 #
 # The robust alternative is to stop matching shapes and start asking what each
 # mode physically *does*.  Project every mode onto the six rigid-body motions of
-# the payload and label it by which motion dominates:
+# a reference point -- typically the payload, or wherever the response matters
+# -- and label it by which group of motions dominates.
 #
-#     bounce_z   - the payload translates vertically  (the classic mount mode)
-#     lateral_xy - the payload translates sideways    (degenerate pair)
-#     rocking_xy - the payload pitches/rolls          (degenerate pair)
-#     torsion_z  - the payload yaws about the axis
-#
-# "The lowest bounce_z frequency" is a continuous function of the design
+# "The lowest frequency of family F" is then a continuous function of the design
 # parameters no matter how the eigenvalue ordering shuffles, so it is a target a
 # GP can actually learn.  It is also the quantity an engineer cares about: you
-# do not want to move "mode 3", you want to move the bounce mode.
+# do not want to move "mode 3", you want to move the mode that is causing the
+# problem.
+#
+# Which motions constitute a family is a property of the *part*, so it arrives
+# as a ModeFamilySpec rather than being fixed here.  The bundled example part in
+# dynopt.geometry shows a worked case.
 
-#: Rigid-body DOF groups that define each physical mode family.
-#:
-#: ``sway_rock`` deliberately merges the two lateral translations with the two
-#: rocking rotations.  On a payload carried by compliant legs these are **not**
-#: separable: the lateral and rocking motions are inertially coupled through the
-#: payload's centre of gravity offset, producing two mixed branches whose
-#: character swaps as the mount's height/span ratio changes.  A mode signature
-#: of ``[0.66 ux, 0.66 ry]`` is a real mixed sway-rock mode, not a
-#: classification failure -- and deciding its label by argmax over two tied
-#: components is a coin flip that injects ~50% noise into the surrogate target.
-#:
-#: Scoring by *group energy* instead sums the ambiguous components rather than
-#: letting them compete, then orders the branches within the family by
-#: frequency.  Both branches are then continuous in the design parameters.
-FAMILY_DOFS: dict[str, tuple[int, ...]] = {
-    "bounce_z": (2,),
-    "sway_rock": (0, 1, 3, 4),
-    "torsion_z": (5,),
-}
+@dataclass(frozen=True)
+class ModeFamilySpec:
+    """How a *particular part* groups rigid-body motion into mode families.
 
-#: How many frequency-ordered branches to extract per family.
-FAMILY_BRANCHES: dict[str, int] = {"bounce_z": 1, "sway_rock": 2, "torsion_z": 1}
+    The dynamics core knows how to project modes onto rigid-body motion and how
+    to score them by DOF group; it does not know what those groups mean for your
+    part. That is a property of the structure, so it is supplied by the part
+    (see :class:`dynopt.geometry.base.PartSpec`), not hardcoded here.
 
-#: Target column names, in order -- what the surrogate regresses against.
-MODE_FAMILIES = ("bounce_z", "sway_rock_1", "sway_rock_2", "torsion_z")
+    ``dofs`` maps a family name to the rigid-body DOF indices it spans, ordered
+    ``(ux, uy, uz, rx, ry, rz)`` about the classification origin. ``branches``
+    says how many frequency-ordered branches to extract from each family.
+
+    **Grouping DOFs is the point, not a convenience.** A family spanning several
+    DOFs scores by their combined energy rather than letting them compete on
+    argmax. Where two motions are inertially coupled -- a payload swaying on
+    compliant legs mixes translation with rocking -- a mode split evenly between
+    them is a real mixed mode, and labelling it by argmax over two tied
+    components is a coin flip that injects ~50% noise into the surrogate target.
+    Give such motions one family and two branches instead.
+    """
+
+    dofs: dict[str, tuple[int, ...]]
+    branches: dict[str, int] = field(default_factory=dict)
+
+    def branch_count(self, family: str) -> int:
+        return int(self.branches.get(family, 1))
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        """Family names, in declaration order."""
+        return tuple(self.dofs)
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        """Target column names: ``fam`` for one branch, ``fam_1``, ``fam_2`` ..."""
+        out: list[str] = []
+        for fam in self.dofs:
+            n = self.branch_count(fam)
+            out.extend([fam] if n == 1 else [f"{fam}_{i+1}" for i in range(n)])
+        return tuple(out)
 
 
 def rigid_body_basis(
@@ -367,23 +385,26 @@ def mode_signature(
     return G / np.clip(norm, 1e-30, None)
 
 
-def family_scores(S: np.ndarray) -> dict[str, np.ndarray]:
+def family_scores(S: np.ndarray, spec: ModeFamilySpec) -> dict[str, np.ndarray]:
     r"""Energy each mode puts into each family's DOF group.
 
     .. math:: E_{j,\mathcal{F}} = \sqrt{\sum_{d \in \mathcal{F}} S_{jd}^2}
 
     Summing within the group is what makes the assignment stable for mixed
-    modes: a mode split evenly between ``ux`` and ``ry`` scores high on
-    ``sway_rock`` either way, instead of flipping between two labels.
+    modes: a mode split evenly across two DOFs of one family scores high on that
+    family either way, instead of flipping between two labels.
     """
     return {
         fam: np.sqrt(np.sum(S[:, list(dofs)] ** 2, axis=1))
-        for fam, dofs in FAMILY_DOFS.items()
+        for fam, dofs in spec.dofs.items()
     }
 
 
 def classify_modes(
-    res: ModalResult, origin: np.ndarray | None = None, min_purity: float = 0.0
+    res: ModalResult,
+    origin: np.ndarray | None = None,
+    spec: ModeFamilySpec | None = None,
+    min_purity: float = 0.0,
 ) -> list[str]:
     """Label each mode with the family holding most of its rigid-body energy.
 
@@ -392,9 +413,14 @@ def classify_modes(
     They are real modes, but they carry little effective mass and are not what
     the optimiser should chase.
     """
+    if spec is None:
+        raise ValueError(
+            "classify_modes needs a ModeFamilySpec; it is a property of the part, "
+            "not of the dynamics core (see PartSpec.mode_families)"
+        )
     S = mode_signature(res, origin)
-    E = family_scores(S)
-    names = list(FAMILY_DOFS)
+    E = family_scores(S, spec)
+    names = list(spec.dofs)
     scores = np.column_stack([E[n] for n in names])
     out = []
     for row in scores:
@@ -406,18 +432,20 @@ def classify_modes(
 def family_frequencies(
     res: ModalResult,
     origin: np.ndarray | None = None,
-    families: tuple[str, ...] = MODE_FAMILIES,
+    spec: ModeFamilySpec | None = None,
     min_purity: float = 0.35,
 ) -> dict[str, float]:
     """Frequency of each physical mode branch (NaN if absent).
 
     This is the surrogate's regression target: a fixed-length, physically
     labelled, continuous vector that survives eigenvalue reordering *and*
-    degenerate eigenspaces.  Multi-branch families (``sway_rock``) yield
-    ``sway_rock_1``, ``sway_rock_2``, ... ordered by frequency.
+    degenerate eigenspaces.  A family declaring two branches yields
+    ``<family>_1``, ``<family>_2``, ordered by frequency.
     """
-    labels = classify_modes(res, origin, min_purity=min_purity)
-    found: dict[str, list[float]] = {fam: [] for fam in FAMILY_DOFS}
+    if spec is None:
+        raise ValueError("family_frequencies needs a ModeFamilySpec (see PartSpec)")
+    labels = classify_modes(res, origin, spec, min_purity=min_purity)
+    found: dict[str, list[float]] = {fam: [] for fam in spec.dofs}
     seen: dict[str, float] = {}
 
     for f, lab in zip(res.frequencies, labels):
@@ -430,8 +458,9 @@ def family_frequencies(
         found[lab].append(float(f))
         seen[lab] = float(f)
 
-    out = {fam: np.nan for fam in families}
-    for fam, n in FAMILY_BRANCHES.items():
+    out = {col: np.nan for col in spec.columns}
+    for fam in spec.dofs:
+        n = spec.branch_count(fam)
         vals = sorted(found.get(fam, []))
         for b in range(n):
             key = fam if n == 1 else f"{fam}_{b+1}"

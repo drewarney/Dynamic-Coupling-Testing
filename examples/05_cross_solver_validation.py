@@ -38,11 +38,11 @@ def main() -> int:
 
     from dynopt.fea.calculix import CalculiXConfig, CalculiXSolver
     from dynopt.fea.reference import modal_solve
-    from dynopt.geometry import MOTOR_MOUNT_SPACE, MotorMountCAD, build_frame
+    from dynopt.geometry import MOTOR_MOUNT, build_frame
 
-    space = MOTOR_MOUNT_SPACE
+    space = MOTOR_MOUNT.design_space
     params = space.to_dict(space.defaults)
-    cad = MotorMountCAD()
+    cad = MOTOR_MOUNT
 
     # CadQuery exports millimetres, so the solver runs in mm / tonne / s:
     # E in MPa and rho in tonne/mm^3. Feeding it SI values with mm geometry is

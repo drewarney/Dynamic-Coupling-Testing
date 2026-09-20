@@ -438,8 +438,29 @@ class CalculiXSolver(ModalSolver):
         self.cad = cad_model
         self.cfg = cfg or CalculiXConfig()
         self.workdir = workdir
+        #: True when ``cad_model`` is a PartSpec that can supply BC hints.
+        self.part = cad_model if hasattr(cad_model, "solver_hints") else None
+
+    def _apply_part_hints(self, params: dict[str, float]) -> None:
+        """Let the part set the config fields the caller left at their defaults.
+
+        Boundary conditions belong to the geometry, not the solver: a selector
+        like "clamp the lowest face" silently picks the wrong face once a design
+        variable moves things around, and the run succeeds anyway. Fields the
+        caller set explicitly are never overridden.
+        """
+        if self.part is None:
+            return
+        hints = self.part.solver_hints(params)
+        if not hints:
+            return
+        defaults = CalculiXConfig()
+        for key, value in hints.items():
+            if hasattr(self.cfg, key) and getattr(self.cfg, key) == getattr(defaults, key):
+                setattr(self.cfg, key, value)
 
     def solve(self, params: dict[str, float], n_modes: int = 10) -> ModalResult:
+        self._apply_part_hints(params)
         cfg = self.cfg
         cfg.n_modes = max(n_modes, cfg.n_modes)
 
@@ -502,6 +523,7 @@ class CalculiXSolver(ModalSolver):
                 meta={
                     "backend": self.name,
                     "params": dict(params),
+                    **({"part": self.part} if self.part is not None else {}),
                     "n_nodes": int(coords.shape[0]),
                     "step_file": step,
                     "workdir": tmp,

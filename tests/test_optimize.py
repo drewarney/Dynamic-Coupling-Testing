@@ -5,7 +5,7 @@ import pytest
 
 from dynopt.doe import lhs_sample, sobol_sample
 from dynopt.fea.reference import ReferenceFrameSolver
-from dynopt.geometry import MOTOR_MOUNT_SPACE, build_frame
+from dynopt.geometry import MOTOR_MOUNT, MOTOR_MOUNT_SPACE
 from dynopt.optimize import (
     ExcitationBand,
     ResonanceObjective,
@@ -21,7 +21,7 @@ SPACE = MOTOR_MOUNT_SPACE
 
 @pytest.fixture(scope="module")
 def solver():
-    return ReferenceFrameSolver(build_frame)
+    return ReferenceFrameSolver(MOTOR_MOUNT)
 
 
 # --------------------------------------------------------------------------

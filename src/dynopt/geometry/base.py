@@ -83,3 +83,108 @@ class ParametricModel(ABC):
     @abstractmethod
     def export_step(self, params: dict[str, float], path: str) -> str:
         """Write a STEP file for this design point; return the path."""
+
+
+class PartSpec(ABC):
+    """Everything the pipeline needs to know about one part.
+
+    Adding a part means writing one of these. The core -- FEA backends, mode
+    classification, DOE, surrogate, optimiser -- holds no knowledge of any
+    specific geometry, so nothing outside this class changes.
+
+    Only :attr:`design_space` and at least one builder are required. A part that
+    supplies :meth:`build_frame` gets the fast beam tier; one that supplies
+    :meth:`build_cad` gets the 3D tier; supplying both enables cross-solver
+    validation and the tiered workflow the benchmark uses.
+
+    :attr:`mode_families` is optional but strongly recommended: without it the
+    surrogate falls back to tracking modes by shape, which degrades over a wide
+    design space (see :mod:`dynopt.dynamics.modal`).
+    """
+
+    #: Short identifier, used in reports and the CLI registry.
+    name: str = "part"
+
+    # -- required ------------------------------------------------------------
+    @property
+    @abstractmethod
+    def design_space(self) -> DesignSpace:
+        """The parameters the optimiser may vary, with bounds."""
+
+    # -- tier 0: beam / frame idealisation -----------------------------------
+    def build_frame(self, params: dict[str, float]):
+        """Return a :class:`dynopt.fea.reference.FrameModel` for ``params``.
+
+        Optional. Implement it when the part is frame-like (struts, arms,
+        brackets built from slender members); a beam idealisation runs in
+        milliseconds and makes large DOEs affordable. Do not implement it for
+        bulky solids -- a beam model of those is not merely approximate, it is
+        wrong, and a validity envelope cannot rescue it.
+        """
+        raise NotImplementedError(f"{type(self).__name__} has no frame tier")
+
+    @property
+    def has_frame(self) -> bool:
+        return type(self).build_frame is not PartSpec.build_frame
+
+    # -- tier 1: solid CAD ---------------------------------------------------
+    def build_cad(self, params: dict[str, float]):
+        """Return a backend-native solid (e.g. a CadQuery Workplane)."""
+        raise NotImplementedError(f"{type(self).__name__} has no CAD tier")
+
+    def export_step(self, params: dict[str, float], path: str) -> str:
+        """Write a STEP file for this design point; return the path."""
+        import cadquery as cq
+
+        cq.exporters.export(self.build_cad(params), path)
+        return path
+
+    @property
+    def has_cad(self) -> bool:
+        return type(self).build_cad is not PartSpec.build_cad
+
+    # -- mode classification -------------------------------------------------
+    @property
+    def mode_families(self):
+        """A :class:`dynopt.dynamics.modal.ModeFamilySpec`, or ``None``.
+
+        Declares which rigid-body motions of :meth:`classification_origin`
+        constitute a physical mode family for this part, and how many branches
+        each family has.
+        """
+        return None
+
+    def classification_origin(self, result) -> np.ndarray | None:
+        """Point about which rigid-body motions are measured.
+
+        Defaults to the centroid of any payload (point-mass) nodes the solver
+        recorded, falling back to the model centroid. Override when the response
+        of interest is somewhere else -- a sensor mount, a bearing seat, an
+        optical bench.
+        """
+        nodes = result.meta.get("nodes")
+        if nodes is None:
+            return None
+        payload = result.meta.get("payload_nodes")
+        nodes = np.asarray(nodes, dtype=float)
+        if payload:
+            return nodes[list(payload)].mean(axis=0)
+        return nodes.mean(axis=0)
+
+    # -- tier 1 solver configuration -----------------------------------------
+    def solver_hints(self, params: dict[str, float]) -> dict:
+        """Geometry-dependent settings the 3D backend cannot infer itself.
+
+        Boundary conditions are the part's business, not the solver's. Returning
+        them here keeps a selector like "clamp the lowest face" from silently
+        picking the wrong face when a design variable moves geometry around --
+        a failure that solves happily and reports confident nonsense.
+
+        Recognised keys: ``fix_selector``, ``fix_plane``, ``fix_tol``,
+        ``payload_mass``, ``payload_radius``.
+        """
+        return {}
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        tiers = [t for t, ok in (("frame", self.has_frame), ("cad", self.has_cad)) if ok]
+        return f"<{type(self).__name__} {self.name!r} tiers={tiers or ['none']}>"

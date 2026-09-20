@@ -25,7 +25,7 @@ from scipy.optimize import differential_evolution, minimize
 
 from ..doe.sampling import sobol_sample
 from ..dynamics.modal import (
-    MODE_FAMILIES,
+    ModeFamilySpec,
     cluster_frequencies,
     cluster_modes,
     effective_mass_fraction,
@@ -78,15 +78,27 @@ class OptimizationResult:
         return "\n".join(lines)
 
 
-def _payload_origin(res: ModalResult) -> np.ndarray | None:
-    """Locate the payload (point-mass) node, used as the classification origin."""
+def _part_of(res: ModalResult):
+    """The :class:`PartSpec` the solver recorded on this result, if any."""
+    return res.meta.get("part")
+
+
+def _origin_of(res: ModalResult) -> np.ndarray | None:
+    """Classification origin: ask the part, else fall back to the payload."""
+    part = _part_of(res)
+    if part is not None:
+        return part.classification_origin(res)
     nodes = res.meta.get("nodes")
-    pay = res.meta.get("payload_nodes")
     if nodes is None:
         return None
-    if pay:
-        return np.asarray(nodes)[list(pay)].mean(axis=0)
-    return np.asarray(nodes).mean(axis=0)
+    payload = res.meta.get("payload_nodes")
+    nodes = np.asarray(nodes, dtype=float)
+    return nodes[list(payload)].mean(axis=0) if payload else nodes.mean(axis=0)
+
+
+def _families_of(res: ModalResult) -> ModeFamilySpec | None:
+    part = _part_of(res)
+    return part.mode_families if part is not None else None
 
 
 def _sample_dataset(
@@ -98,6 +110,7 @@ def _sample_dataset(
     verbose: bool = False,
     rtol: float = 0.02,
     min_purity: float = 0.35,
+    families: ModeFamilySpec | None = None,
 ) -> tuple[np.ndarray, np.ndarray, list[ModalResult], list[str]]:
     """Run FEA over a design matrix and build continuous regression targets.
 
@@ -105,12 +118,13 @@ def _sample_dataset(
     targets -- the single most consequential choice in the whole pipeline:
 
     ``"family"`` (default, recommended)
-        Classify each mode by its rigid-body signature at the payload and take
-        the lowest frequency of each physical family (bounce / lateral /
-        rocking / torsion).  Immune to eigenvalue reordering and to the
-        arbitrary rotation within degenerate eigenspaces, so the target is a
-        continuous function of the design parameters across the *whole* design
-        space.  Columns are :data:`MODE_FAMILIES`.
+        Classify each mode by its rigid-body signature about the part's
+        classification origin and take the lowest frequency of each physical
+        family. Immune to eigenvalue reordering and to the arbitrary rotation
+        within degenerate eigenspaces, so the target stays a continuous function
+        of the design parameters across the *whole* design space. The families
+        are declared by the part (``PartSpec.mode_families``); pass ``families``
+        to override, or when the solver does not carry a part.
 
     ``"cluster"``
         Group near-degenerate modes and match clusters to a reference design by
@@ -123,19 +137,21 @@ def _sample_dataset(
 
     Returns ``(F, mass, results, column_names)``.
     """
-    n_cols = len(MODE_FAMILIES) if targets == "family" else n_modes
-    F = np.full((X.shape[0], n_cols), np.nan)
-    mass = np.full(X.shape[0], np.nan)
+    n = X.shape[0]
+    mass = np.full(n, np.nan)
     results: list[ModalResult] = []
+    rows: list[list[float] | None] = [None] * n
+    cols: list[str] | None = (
+        None if targets == "family" else [f"mode{i+1}" for i in range(n_modes)]
+    )
     phi_ref, clusters_ref = None, None
-    cols = list(MODE_FAMILIES) if targets == "family" else [f"mode{i+1}" for i in range(n_modes)]
 
     for i, x in enumerate(X):
         try:
             res = solver.solve(space.to_dict(x), n_modes=n_modes)
         except Exception as exc:  # a degenerate geometry is a data point, not a crash
             if verbose:
-                print(f"  [{i+1}/{X.shape[0]}] FAILED: {exc}")
+                print(f"  [{i+1}/{n}] FAILED: {exc}")
             results.append(None)
             continue
 
@@ -143,30 +159,49 @@ def _sample_dataset(
         mass[i] = res.mass
 
         if targets == "family":
-            fam = family_frequencies(
-                res, _payload_origin(res), min_purity=min_purity
-            )
-            F[i, :] = [fam[k] for k in MODE_FAMILIES]
+            spec = families or _families_of(res)
+            if spec is None:
+                raise ValueError(
+                    "targets='family' needs a ModeFamilySpec. Give the solver a "
+                    "PartSpec that declares mode_families, or pass families=..."
+                )
+            if cols is None:
+                cols = list(spec.columns)
+            fam = family_frequencies(res, _origin_of(res), spec, min_purity=min_purity)
+            rows[i] = [fam[k] for k in cols]
+
         elif targets == "cluster" and res.modes is not None:
+            row = [np.nan] * n_modes
             if phi_ref is None:
                 phi_ref = res.modes
                 clusters_ref = cluster_modes(res.frequencies, rtol=rtol)
                 fc = cluster_frequencies(res.frequencies, clusters_ref)
-                F[i, : min(fc.size, n_cols)] = fc[:n_cols]
+                row[: min(fc.size, n_modes)] = fc[:n_modes]
             else:
                 cnew = cluster_modes(res.frequencies, rtol=rtol)
                 idx = track_clusters(phi_ref, clusters_ref, res.modes, cnew)
                 fc = cluster_frequencies(res.frequencies, cnew)
-                for j, jj in enumerate(idx[:n_cols]):
+                for j, jj in enumerate(idx[:n_modes]):
                     if jj >= 0:
-                        F[i, j] = fc[jj]
+                        row[j] = fc[jj]
+            rows[i] = row
+
         else:
-            F[i, : min(res.n_modes, n_cols)] = res.frequencies[:n_cols]
+            row = [np.nan] * n_modes
+            row[: min(res.n_modes, n_modes)] = res.frequencies[:n_modes]
+            rows[i] = row
 
         if verbose and (i + 1) % 10 == 0:
-            f1 = np.nanmin(F[i]) if np.isfinite(F[i]).any() else np.nan
-            print(f"  [{i+1}/{X.shape[0]}] f_min={f1:.1f} Hz  m={mass[i]*1000:.1f} g")
+            vals = np.asarray(rows[i], dtype=float)
+            f1 = np.nanmin(vals) if np.isfinite(vals).any() else np.nan
+            print(f"  [{i+1}/{n}] f_min={f1:.1f} Hz  m={mass[i]*1000:.1f} g")
 
+    if cols is None:  # every design failed before a spec could be resolved
+        cols = [f"mode{i+1}" for i in range(n_modes)]
+    F = np.full((n, len(cols)), np.nan)
+    for i, row in enumerate(rows):
+        if row is not None:
+            F[i, : len(row)] = row
     return F, mass, results, cols
 
 

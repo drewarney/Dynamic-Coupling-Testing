@@ -13,7 +13,7 @@ import numpy as np
 
 from dynopt.doe import discrepancy, sobol_sample
 from dynopt.fea.reference import ReferenceFrameSolver
-from dynopt.geometry import MOTOR_MOUNT_SPACE, build_frame
+from dynopt.geometry import MOTOR_MOUNT
 from dynopt.optimize.driver import _sample_dataset
 from dynopt.surrogate import FrequencySurrogate
 
@@ -23,8 +23,9 @@ N_TRAIN, N_TEST = 128, 200
 
 
 def main() -> None:
-    space = MOTOR_MOUNT_SPACE
-    solver = ReferenceFrameSolver(build_frame)
+    part = MOTOR_MOUNT
+    space = part.design_space
+    solver = ReferenceFrameSolver(part)
 
     X = sobol_sample(space, N_TRAIN, seed=1)
     print(f"[DOE] {N_TRAIN} Sobol points, centred L2 discrepancy "

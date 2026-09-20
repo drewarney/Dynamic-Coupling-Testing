@@ -409,16 +409,29 @@ def modal_solve(
 
 
 class ReferenceFrameSolver(ModalSolver):
-    """Adapts a parametric :class:`FrameModel` builder to the ModalSolver API."""
+    """Runs the beam tier for a part.
+
+    Accepts a :class:`dynopt.geometry.base.PartSpec` (preferred) or a bare
+    ``params -> FrameModel`` callable. Given a part, it records it on each
+    result so downstream code -- mode classification especially -- can ask the
+    part what its modes mean without the core knowing which part it is.
+    """
 
     name = "reference-frame"
 
-    def __init__(self, builder, shear: bool = True):
-        self.builder = builder  # callable: dict[str, float] -> FrameModel
+    def __init__(self, part_or_builder, shear: bool = True):
+        if hasattr(part_or_builder, "build_frame"):
+            self.part = part_or_builder
+            self.builder = part_or_builder.build_frame
+        else:
+            self.part = None
+            self.builder = part_or_builder
         self.shear = shear
 
     def solve(self, params: dict[str, float], n_modes: int = 10) -> ModalResult:
         model = self.builder(params)
         res = modal_solve(model, n_modes=n_modes, shear=self.shear)
         res.meta["params"] = dict(params)
+        if self.part is not None:
+            res.meta["part"] = self.part
         return res

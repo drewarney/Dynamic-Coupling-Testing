@@ -1,7 +1,7 @@
 """Structural dynamics post-processing: modal, coupling, harmonic response."""
 
 from .modal import (
-    MODE_FAMILIES,
+    ModeFamilySpec,
     classify_modes,
     canonicalize_degenerate_basis,
     cluster_frequencies,
@@ -13,7 +13,6 @@ from .modal import (
     participation_factors,
     family_frequencies,
     family_scores,
-    FAMILY_DOFS,
     mode_signature,
     rigid_body_basis,
     subspace_mac,
@@ -36,8 +35,9 @@ __all__ = [
     "participation_factors", "effective_modal_mass", "effective_mass_fraction",
     "mac", "track_modes", "modal_summary",
     "cluster_modes", "cluster_frequencies", "subspace_mac", "track_clusters",
-    "track_modes_robust", "MODE_FAMILIES", "classify_modes", "mode_signature",
-    "family_frequencies", "rigid_body_basis", "canonicalize_degenerate_basis", "family_scores", "FAMILY_DOFS",
+    "track_modes_robust", "classify_modes", "mode_signature",
+    "family_frequencies", "rigid_body_basis", "canonicalize_degenerate_basis",
+    "family_scores", "ModeFamilySpec",
     "rayleigh_damping", "discrete_damper_matrix", "modal_damping_matrix",
     "coupling_index", "energy_transfer_index", "coupled_pairs", "campbell_diagram",
     "direct_frf", "modal_frf", "rms_response", "transmissibility",

@@ -169,7 +169,65 @@ mapdl.antype("STATIC"); mapdl.pstres("ON"); mapdl.solve()
 mapdl.antype("MODAL");  mapdl.pstres("ON"); mapdl.solve()
 ```
 
-## 1.4 Tier 1 hardening: what actually breaks
+## 1.4 Adding a part: the `PartSpec` boundary
+
+The pipeline holds no knowledge of any specific geometry. A part is one class:
+
+```python
+from dynopt.geometry.base import PartSpec, DesignSpace, DesignVariable
+from dynopt.dynamics.modal import ModeFamilySpec
+
+class DroneArm(PartSpec):
+    name = "drone_arm"
+
+    @property
+    def design_space(self):
+        return DesignSpace([
+            DesignVariable("length", 0.10, 0.40, 0.25, "m", "arm length"),
+            DesignVariable("dia",    0.008, 0.030, 0.016, "m", "tube OD"),
+            DesignVariable("thk",    0.0005, 0.004, 0.0015, "m", "wall"),
+        ])
+
+    @property
+    def mode_families(self):                 # optional but recommended
+        return ModeFamilySpec(
+            dofs={"bending": (1, 2, 4, 5), "axial": (0,), "torsion": (3,)},
+            branches={"bending": 2},
+        )
+
+    def build_frame(self, params):           # tier 0 (optional)
+        ...  # -> FrameModel
+
+    def build_cad(self, params):             # tier 1 (optional)
+        ...  # -> CadQuery Workplane
+
+    def solver_hints(self, params):          # optional
+        return {"fix_selector": "z_plane", "fix_plane": 0.0}
+```
+
+Then register it in `geometry/registry.py` and it is available everywhere —
+solvers, DOE, surrogate, optimiser, CLI (`--part drone_arm`) — with no core
+change. `tests/test_partspec.py` proves this by driving a cantilever-with-
+tip-mass through the whole pipeline and checking its first bending frequency
+against the closed-form Rayleigh estimate.
+
+### What belongs to the part, and why
+
+| Concern | Why it is the part's, not the core's |
+|---|---|
+| `mode_families` | Which rigid-body motions form a family is a property of the structure. "Bounce / sway-rock / torsion" means nothing without a payload on supports. |
+| `classification_origin` | Rigid-body motion is measured about *something* — a payload, a sensor seat, a bearing. |
+| `solver_hints` (BCs) | A selector like "clamp the lowest face" silently picks the wrong face once a design variable moves geometry. The part knows which face is the mounting plane; the solver does not. |
+| Tier availability | A beam idealisation is right for frame-like parts and simply wrong for bulky solids. The part declares which tiers it supports. |
+
+### Which tiers to implement
+
+Implement `build_frame` only when the part is genuinely frame-like — struts,
+arms, brackets built from slender members. For a bulky solid a beam model is
+not approximate, it is wrong, and no validity envelope rescues it. Such a part
+supplies `build_cad` only and runs coarse-mesh 3D as its cheap tier.
+
+## 1.5 Tier 1 hardening: what actually breaks
 
 The Tier 1 path was written before it was ever executed. Running it against
 Tier 0 found six defects, and **every one produced a confident wrong answer
@@ -201,7 +259,7 @@ Three rules follow, and they generalise well beyond this part:
 toolchain (CadQuery -> Gmsh -> CalculiX); unit tests on the beam tier cannot
 catch any of these.
 
-## 1.4 Licensing — decide this before you write a business plan
+## 1.6 Licensing — decide this before you write a business plan
 
 | Component | Licence | Commercial use |
 |---|---|---|
