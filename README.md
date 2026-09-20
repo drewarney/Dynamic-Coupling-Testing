@@ -192,6 +192,7 @@ A MATLAB implementation of the same loop is in [`matlab/`](matlab/).
 | [`docs/02_ROADMAP.md`](docs/02_ROADMAP.md) | Phase-by-phase plan with acceptance tests and failure modes |
 | [`docs/03_BENCHMARK.md`](docs/03_BENCHMARK.md) | Benchmark spec, results, **physical validation protocol** |
 | [`docs/04_COMMERCIALIZATION.md`](docs/04_COMMERCIALIZATION.md) | Resume framing; honest SaaS assessment |
+| [`docs/05_PRODUCT_ROADMAP.md`](docs/05_PRODUCT_ROADMAP.md) | What blocks generality (measured); the qual-testing end goal; next-session plan |
 
 ---
 
