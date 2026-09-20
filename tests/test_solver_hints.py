@@ -282,3 +282,31 @@ def test_the_two_tiers_agree_at_the_default_design(part):
         f"outside the declared idealisation bound {part.max_tier_ratio:.2f}. "
         "One of the tiers is modelling something the other is not."
     )
+
+
+def test_an_explicit_zero_payload_stays_zero():
+    """A bare-structure run must come back bare.
+
+    ``payload_mass`` cannot use the "differs from the default" rule the other
+    hintable fields use, because zero is a meaningful request here. Example 05
+    asks for exactly 0.0 to measure the bare structure, and for one commit that
+    was indistinguishable from not having asked: the part's hint applied, the
+    run came back carrying the 350 g motor, and the example printed the same
+    frequency for its bare and loaded cases without a word of complaint.
+    """
+    part = MOTOR_MOUNT
+    d = _at(part, 0.5)
+
+    bare = _solver(part, payload_mass=0.0)
+    bare._apply_part_hints(d)
+    assert bare.cfg.payload_mass == 0.0, "an explicit zero payload was overridden"
+
+    asked = _solver(part)
+    asked._apply_part_hints(d)
+    assert asked.cfg.payload_mass == pytest.approx(part.motor_mass * 1e-3), (
+        "a caller who says nothing should get the part's payload"
+    )
+
+    pinned = _solver(part, payload_mass=1.25e-4)
+    pinned._apply_part_hints(d)
+    assert pinned.cfg.payload_mass == 1.25e-4

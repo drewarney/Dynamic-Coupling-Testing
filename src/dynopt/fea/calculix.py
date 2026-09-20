@@ -211,7 +211,18 @@ class CalculiXConfig:
     # Non-structural payload, smeared over the nodes of the top face within
     # `payload_radius` of the part axis -- a motor bolted to its flange.  Put on
     # a single node it would instead excite a spurious local mode.
-    payload_mass: float = 0.0         # model mass units (tonne for mm/t/s)
+    # Model mass units (tonne for mm/t/s). ``None`` means "ask the part"; a
+    # number -- including ``0.0`` -- is the caller's own choice and is never
+    # overridden.
+    #
+    # This field cannot use the "differs from the default" rule the other
+    # hintable fields use, because zero is a *meaningful* value here: a bare
+    # structure run asks for exactly 0.0 payload, which is indistinguishable
+    # from never having asked. Example 05 did exactly that, and its "bare
+    # structure" case silently came back carrying the 350 g motor -- printing
+    # the same frequency as its loaded case, with nothing to say the two runs
+    # were identical.
+    payload_mass: float | None = None
     payload_radius: float = 0.0       # model length units (mm)
 
 
@@ -474,8 +485,9 @@ def write_modal_deck(
     lines.append(f"*ELEMENT, TYPE={cfg.solid_type}, ELSET=ESOLID")
     lines += elem_lines
 
-    if cfg.payload_mass > 0.0 and payload_tags is not None and payload_tags.size:
-        share = cfg.payload_mass / payload_tags.size
+    mass = cfg.payload_mass or 0.0
+    if mass > 0.0 and payload_tags is not None and payload_tags.size:
+        share = mass / payload_tags.size
         start = max(int(e.split(",")[0]) for e in elem_lines) + 1
         lines.append("*ELEMENT, TYPE=MASS, ELSET=EPAYLOAD")
         for k, tag in enumerate(payload_tags):
@@ -668,7 +680,7 @@ class CalculiXSolver(ModalSolver):
             fixed = _select_fixed_nodes(coords, tags, cfg)
 
             payload = None
-            if cfg.payload_mass > 0.0:
+            if (cfg.payload_mass or 0.0) > 0.0:
                 payload = _select_payload_nodes(coords, tags, cfg)
             write_modal_deck(mesh_inp, job + ".inp", fixed, cfg, payload_tags=payload)
 
