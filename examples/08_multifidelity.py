@@ -178,8 +178,10 @@ def main(path) -> int:
             if not t["have"].any():
                 print(f"  {tier:7s} no successful solves")
                 continue
-            print(f"  {tier:7s} {t['have'].sum():2d}/{n} solved | "
-                  f"{t['t']*1000:8.1f} ms | {t['nodes']:8.0f} nodes")
+            cost = (f"{t['t']*1000:7.0f} ms" if t["t"] < 1.0
+                    else f"{t['t']:7.1f} s ")
+            nodes = f"{t['nodes']:8.0f} nodes" if t["nodes"] else "   (no mesh)"
+            print(f"  {tier:7s} {t['have'].sum():2d}/{n} solved | {cost} | {nodes}")
 
         for cheap_key in ("beam", "coarse"):
             X, Fc, Ff = paired(d, cheap_key)
