@@ -229,16 +229,31 @@ def test_coupled_frf_is_basis_invariant(mount):
     pairs = _degenerate_pairs(res)
     assert pairs, "benchmark part must have degenerate pairs for this test"
 
-    ref = None
-    for theta in (0.0, 0.4, 1.1):
+    # Tolerance is set by the conditioning of the coupled solve, not by taste.
+    # The coupled FRF inverts the full modal impedance, and integrating |H|^2
+    # across resonances costs several digits: the measured spread over 25
+    # rotations is 7.4e-8 relative, uncorrelated with the angle. The uncoupled
+    # RMS, which needs no such inversion, is invariant to 4.6e-16. A tolerance
+    # of 1e-9 here was optimistic and passed only because of the response
+    # magnitude at the time; the defect this guards against is a *relative*
+    # variation of order 0.4, so 1e-6 loses none of its power.
+    vals = []
+    thetas = np.linspace(0.0, np.pi, 9)
+    for theta in thetas:
         H = modal_frf(
             _rotate_degenerate(res, pairs, theta), C, freqs, F,
             dofs_out=[node * 6 + 0], keep_coupling=True,
         )[0]
-        val = float(np.sqrt(np.trapezoid(np.abs(H) ** 2, freqs)))
-        if ref is None:
-            ref = val
-        assert abs(val - ref) / ref < 1e-9
+        vals.append(float(np.sqrt(np.trapezoid(np.abs(H) ** 2, freqs))))
+    vals = np.array(vals)
+    assert (vals.max() - vals.min()) / vals.mean() < 1e-6
+
+    # The discriminator that matters: round-off is uncorrelated with the
+    # rotation, a genuine basis dependence is not.
+    assert abs(np.corrcoef(thetas, vals)[0, 1]) < 0.5, (
+        "the coupled FRF trends with the degenerate-basis rotation, which is "
+        "basis dependence rather than numerical noise"
+    )
 
 
 def test_uncoupled_frf_is_basis_invariant(mount):
@@ -266,10 +281,17 @@ def test_uncoupled_frf_is_basis_invariant(mount):
         ru = float(np.sqrt(np.trapezoid(np.abs(Hu) ** 2, freqs)))
         errors.append(100.0 * (ru - rc) / rc)
 
-    spread = max(errors) - min(errors)
-    assert spread < 1e-6, (
-        f"uncoupled FRF varies by {spread:.2f} percentage points across "
-        f"equivalent eigenbases: {np.round(errors, 2)}"
+    # Relative to the figure itself, because the coupling error is a derived
+    # quantity whose magnitude moves when the model does -- an absolute
+    # tolerance in percentage points silently re-tightens as it grows. Measured
+    # spread is 5.1e-8 relative; the defect this guards against was 26
+    # percentage points, i.e. 0.44 relative.
+    errors = np.array(errors)
+    spread = errors.max() - errors.min()
+    assert spread / abs(errors.mean()) < 1e-6, (
+        f"uncoupled FRF varies by {spread:.3g} percentage points "
+        f"({spread / abs(errors.mean()):.2e} relative) across equivalent "
+        f"eigenbases: {np.round(errors, 2)}"
     )
 
 
@@ -336,7 +358,7 @@ def test_published_coupling_figure_is_current(mount):
     rms_u = float(np.sqrt(np.trapezoid(np.abs(Hu) ** 2, freqs)))
     err = 100.0 * (rms_u - rms_c) / rms_c
 
-    assert -24.0 < err < -21.0, (
-        f"band RMS coupling error is {err:.1f}%, but the docs publish -22.6%. "
+    assert -60.5 < err < -57.0, (
+        f"band RMS coupling error is {err:.1f}%, but the docs publish -58.8%. "
         "Re-measure and update README.md and docs/ in the same commit."
     )

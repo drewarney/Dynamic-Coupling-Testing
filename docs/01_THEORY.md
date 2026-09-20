@@ -263,8 +263,8 @@ $$\tilde{H}(\omega) = \Phi[\Omega^2 + i\omega\tilde{C} - \omega^2 I]^{-1}\Phi^T$
 
 The off-diagonal terms of $\tilde{C}$ are **kept** and the small (10–30 DOF)
 system solved directly. Zeroing them is the textbook uncoupled-SDOF assumption;
-on the benchmark part it understates band RMS response by **22.6%** and peak
-response by **38.7%**.
+on the benchmark part it understates band RMS response by **58.8%** and peak
+response by **80.4%**.
 
 Band-limited RMS, the scalar the optimiser can minimise:
 

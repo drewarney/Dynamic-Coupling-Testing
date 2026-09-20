@@ -208,13 +208,21 @@ dampers — bushings, bolted joints, bearing films — which are not proportiona
 | Rayleigh $C = \alpha M + \beta K$ | $4\times10^{-13}$ | decoupled to machine precision ✓ |
 | Discrete dashpots at the payload | 0.62 | strongly coupled |
 
-**Ignoring cross-modal coupling understates band-limited RMS response by 22.6%**
-(and peak response by 38.7%) on the benchmark part.
+**Ignoring cross-modal coupling understates band-limited RMS response by 58.8%**
+(and peak response by 80.4%) on the benchmark part.
 
 This number is basis-invariant by construction. Getting it right required
 canonicalising the eigenbasis inside degenerate subspaces first — without that
-step the same code returns anywhere from −1.5% to −22.6% depending on which
+step the same code returned anywhere from −1.5% to −22.6% depending on which
 LAPACK build ran it. See [`docs/01_THEORY.md`](docs/01_THEORY.md) §2.4.
+
+*It read 22.6% until the plate-stiffness calibration
+([docs/06](docs/06_MULTIFIDELITY.md) §6.6) moved the beam tier's modes from
+244.6/264.9/600.1 Hz to 372.6/405.0/661.0 Hz. The effect is a property of this
+part with this dashpot configuration (180 N·s/m and 6 N·m·s/rad at the
+payload), not a universal constant —
+`tests/test_dynamics.py::test_published_coupling_figure_is_current` owns it and
+failed the moment the modes moved, which is what it is for.*
 
 ---
 

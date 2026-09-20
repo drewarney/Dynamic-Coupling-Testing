@@ -88,7 +88,7 @@ Expect: Rayleigh $\kappa \approx 10^{-13}$ (decoupled, as theory says),
 discrete dampers $\kappa \approx 1.0$, and a quantified FRF difference.
 
 Benchmark result: **ignoring cross-modal coupling understates band RMS
-response by 22.6%, and peak response by 38.7%.** That one sentence is the core
+response by 58.8%, and peak response by 80.4%.** That one sentence is the core
 of your project report.
 
 **Before you quote any coupling number, check it is basis-invariant.** Re-run
