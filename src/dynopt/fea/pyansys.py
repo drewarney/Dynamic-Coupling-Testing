@@ -46,14 +46,44 @@ import numpy as np
 from .base import ModalResult, ModalSolver
 
 
+#: What must be resolved before this backend can be trusted.
+#:
+#: This module was written from the PyAnsys documentation and has **never been
+#: executed** -- there is no MAPDL licence in this project's environment. That
+#: is precisely the state the CalculiX path was in when running it for the
+#: first time turned up six defects, every one of which produced a confident
+#: wrong answer rather than an error (``docs/00_ARCHITECTURE.md`` S1.5).
+#:
+#: Reading it against what the CalculiX backend has since learned turns up the
+#: same defects here. Rather than "fix" them blind -- untestable changes to
+#: untestable code are not an improvement -- the solver refuses to run and says
+#: why. Set ``MapdlConfig.i_have_validated_this = True`` to work on it with a
+#: real licence.
+UNVALIDATED = (
+    "supports are picked as the lowest-Z face by coordinate, ignoring the "
+    "part's solver_hints fix_selector -- wrong face for any part that is not "
+    "a motor mount, e.g. the cantilever arm clamps along x",
+    "payload_mass is never applied, so a mount solves bare while the caller "
+    "believes its motor is attached",
+    "config defaults are SI but export_step writes millimetres, which is the "
+    "units trap CalculiXConfig already fell into (off by 1e9 in density)",
+    "mass falls back to nan on any failure, and a nan mass makes every "
+    "objective in a run nan (see ModalResult.missing_contract)",
+    "meta carries none of CONTRACT_META, so mode classification, the payload "
+    "origin and the CLI's coupling command all degrade silently",
+    "igesin() is handed a .step file; IGESIN reads IGES",
+)
+
+
 @dataclass
 class MapdlConfig:
-    E: float = 68.9e9
+    # mm / tonne / s, to match the millimetre geometry export_step writes.
+    E: float = 68900.0             # AL6061 [MPa]
     nu: float = 0.33
-    rho: float = 2700.0
+    rho: float = 2.7e-9            # AL6061 [tonne/mm^3]
     element: str = "SOLID187"      # 10-node quadratic tet
     smart_size: int = 4
-    mesh_size: float = 0.003       # [m]
+    mesh_size: float = 3.0         # [mm]
     n_modes: int = 10
     freq_lower: float = 0.0
     freq_upper: float = 10000.0
@@ -63,6 +93,8 @@ class MapdlConfig:
     nproc: int = 4
     export_matrices: bool = False
     extra_aps: list[str] = field(default_factory=list)
+    #: Set True only with a real licence, having worked through UNVALIDATED.
+    i_have_validated_this: bool = False
 
 
 class MapdlSolver(ModalSolver):
@@ -113,6 +145,16 @@ class MapdlSolver(ModalSolver):
         import tempfile, os
 
         cfg = self.cfg
+        if not cfg.i_have_validated_this:
+            issues = "\n  * ".join(UNVALIDATED)
+            raise NotImplementedError(
+                "the MAPDL backend has never been executed and has known "
+                "defects that would each return a plausible wrong answer "
+                f"rather than an error:\n  * {issues}\n"
+                "Set MapdlConfig.i_have_validated_this=True to work on it with "
+                "a licence. Until then use --backend calculix, which is "
+                "validated against closed-form solutions and a 48-design sweep."
+            )
         mapdl = self.mapdl
         n_modes = max(n_modes, 1)
 

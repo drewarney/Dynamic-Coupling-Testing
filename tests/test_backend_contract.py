@@ -169,3 +169,39 @@ def test_the_objective_refuses_a_nan_mass():
     assert np.isfinite(obj(np.array([800.0, 900.0]), mass=0.4))
     with pytest.raises(ValueError, match="nan"):
         obj(np.array([800.0, 900.0]), mass=float("nan"))
+
+
+# ---------------------------------------------------------------------------
+# The backend nobody has run
+# ---------------------------------------------------------------------------
+def test_the_mapdl_backend_refuses_to_run_unvalidated():
+    """Untested code that returns numbers is worse than code that refuses.
+
+    `fea/pyansys.py` was written from documentation and has never been
+    executed. Read against what the CalculiX backend has since learned, it
+    repeats the same defects -- wrong clamped face, missing payload, SI units
+    against millimetre geometry, nan mass, no contract metadata. Each would
+    return a confident wrong answer.
+
+    It therefore refuses, and names them. This test pins that so nobody
+    re-enables it by accident.
+    """
+    from dynopt.fea.pyansys import UNVALIDATED, MapdlConfig, MapdlSolver
+
+    solver = MapdlSolver(MOTOR_MOUNT, MapdlConfig())
+    with pytest.raises(NotImplementedError) as exc:
+        solver.solve({"span": 0.07}, n_modes=4)
+    message = str(exc.value)
+    assert "never been executed" in message
+    for issue in UNVALIDATED:
+        assert issue in message, f"the refusal does not mention: {issue[:40]}"
+
+
+def test_the_mapdl_config_units_match_the_geometry_that_is_exported():
+    """export_step writes millimetres; SI values here are the classic trap."""
+    from dynopt.fea.pyansys import MapdlConfig
+
+    cfg = MapdlConfig()
+    assert cfg.E == pytest.approx(68900.0)      # MPa, not Pa
+    assert cfg.rho == pytest.approx(2.7e-9)     # tonne/mm^3, not kg/m^3
+    assert 0.1 < cfg.mesh_size < 100.0          # mm, not metres

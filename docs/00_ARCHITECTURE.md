@@ -280,6 +280,24 @@ Three rules follow, and they generalise well beyond this part:
 toolchain (CadQuery -> Gmsh -> CalculiX); unit tests on the beam tier cannot
 catch any of these.
 
+### 1.5.0 The Ansys backend has never been run, and says so
+
+`fea/pyansys.py` was written from the PyAnsys documentation. Nothing in this
+project has a MAPDL licence, so not one line of it has executed — exactly the
+state the CalculiX path was in before the defects in §1.5 were found.
+
+Read against what the CalculiX backend has since learned, it repeats them:
+supports picked as the lowest-Z face by coordinate rather than from the part's
+`solver_hints`; no payload mass at all; SI defaults against millimetre
+geometry; a `nan` mass fallback; none of `CONTRACT_META`; and `igesin()` handed
+a `.step` file.
+
+It therefore **refuses to solve**, listing all six, rather than returning a
+plausible number. Fixing them blind would be untestable changes to untestable
+code — the point of §1.5 is that reading this class of defect is not the same
+as having run it. Anyone with a licence sets
+`MapdlConfig.i_have_validated_this = True` and works through the list.
+
 ### 1.5.1 What breaks at DOE scale
 
 Solving *one* design and solving *hundreds* are different problems. A 48-design
