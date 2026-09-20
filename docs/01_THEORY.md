@@ -330,3 +330,27 @@ Coverage near the nominal 95% means the GP's error bars are **calibrated** — i
 knows what it does not know, which is what makes active learning and
 trust-region optimisation valid. A gradient-boosted or neural surrogate gives
 you the mean without an honest variance, so you never know when to re-run FEA.
+
+## 2.8 The multi-fidelity discrepancy
+
+Same GP machinery, pointed at the gap between two solvers rather than at one
+solver's response. Kennedy-O'Hagan, in log space because frequencies are
+positive and multiplicative:
+
+$$\log f_{\text{fine}}(x) = \log f_{\text{cheap}}(x) + r(x), \qquad r = \log\rho$$
+
+Two details decide whether this works:
+
+1. **Fit `r` on paired designs only.** Where both tiers were run, the
+   discrepancy is *measured*, not inferred, so the correction never learns the
+   cheap surrogate's own interpolation error on top of the physics.
+2. **Column correspondence is an assumption, not a given.** Sorted column *k*
+   of one tier is only comparable to column *k* of the other while both
+   resolve the same modes in the same order. A cheap tier that misses a mode
+   silently misaligns every column above it, and the correction then averages
+   unrelated physics into a confident wrong answer.
+   `MultiFidelitySurrogate.correspondence_report()` exposes the per-column
+   ratio spread so this is checked rather than assumed.
+
+Measured results, both parts, and what the correction can and cannot fix:
+[docs/06_MULTIFIDELITY.md](06_MULTIFIDELITY.md).

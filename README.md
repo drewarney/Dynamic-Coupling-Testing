@@ -253,6 +253,7 @@ A MATLAB implementation of the same loop is in [`matlab/`](matlab/).
 | [`docs/03_BENCHMARK.md`](docs/03_BENCHMARK.md) | Benchmark spec, results, **physical validation protocol** |
 | [`docs/04_COMMERCIALIZATION.md`](docs/04_COMMERCIALIZATION.md) | Resume framing; honest SaaS assessment |
 | [`docs/05_PRODUCT_ROADMAP.md`](docs/05_PRODUCT_ROADMAP.md) | What blocks generality (measured); the qual-testing end goal; next-session plan |
+| [`docs/06_MULTIFIDELITY.md`](docs/06_MULTIFIDELITY.md) | Can a learned correction make the cheap tier quotable? Measured, both parts, including where the answer is no |
 
 ---
 

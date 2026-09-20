@@ -123,6 +123,23 @@ That leaves the original gap open: a bulky solid still has no cheap tier. The
 honest options are a reduced-order model (Craig-Bampton on a fixed mesh) or
 accepting 3D cost for such parts. Neither is a coarse mesh.
 
+**On item 4 — the beam half, measured.** A GP on the log-ratio cuts held-out
+error from 40.2% to 18.3% on the mount and from 21.0% to 4.9% on the arm, and a
+per-column scalar does not (25.3% / 13.2%). At equal solver-seconds it wins
+while fine-tier data is scarce and stops mattering once it is not — the arm's
+fine-only GP overtakes at 12 fine solves. So the correction is worth shipping
+for early exploration and is not a route to quotable numbers: 18% still needs a
+3D sign-off. Full write-up in `docs/06_MULTIFIDELITY.md`.
+
+**What the study actually surfaced as the next move.** The mount's beam tier
+agrees with 3D to 0.8% *unloaded* and errs 44% *loaded*. The gap is one missing
+piece of physics — a plate carrying a central point mass on four edge beams has
+no membrane action — not a failure of beam theory. Closing that (an effective
+plate stiffness, or a shell element for the plate) is worth more than any
+further work on the correction, and it would move the mount toward the arm's
+5%. That is the highest-value item this study produced and it was not on the
+roadmap before.
+
 **On item 6 — the honest caveat.** Morphing optimises arbitrary geometry without
 parameters, which is the generality unlock. But it returns a deformed *mesh*,
 not manufacturable CAD. Either a reconstruction step or customer redraw is
@@ -131,6 +148,9 @@ is solved.
 
 ## Next-session prompt (paste verbatim)
 
+> **Superseded — items 1-4 are done.** Kept for the record; the current next
+> step is the plate-stiffness gap described under item 4 above, then item 5.
+>
 > Continue `dynopt` on branch `claude/vibrant-johnson-ocoqui`. Goal this
 > session: break the pipeline's dependence on the motor mount so a new part is
 > one file, and remove mode tracking from the surrogate's critical path.
