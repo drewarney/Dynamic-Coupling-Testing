@@ -126,6 +126,22 @@ def gmsh_model(name: str = "part"):
     """
     gmsh = _ensure_gmsh()
     gmsh.clear()
+    # `clear()` empties the model but leaves the *options* set. They are global
+    # and they persist, so a scope that does not set an option inherits
+    # whatever the last caller chose -- and the behaviour of a mesh then
+    # depends on what ran before it in the same process. Meshing the same cube
+    # before and after a `mesh_step` gave 337 nodes and 2412, because
+    # `Mesh.ElementOrder = 2` carried over.
+    #
+    # Production code was safe only by accident: `mesh_step` sets every option
+    # it depends on. Restoring defaults here makes a scope genuinely fresh, so
+    # the next helper that meshes without setting all of them cannot inherit a
+    # stale one.
+    try:
+        gmsh.option.restoreDefaults()
+    except Exception:  # pragma: no cover - older gmsh
+        pass
+    gmsh.option.setNumber("General.Terminal", 0)
     gmsh.model.add(name)
     try:
         yield gmsh

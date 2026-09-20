@@ -98,6 +98,39 @@ def test_unknown_min_feature_leaves_the_mesh_alone():
     assert s._mesh_sizes() == (4.0, 1.0)
 
 
+def test_a_gmsh_scope_does_not_inherit_the_previous_one_s_options():
+    """Gmsh options are global and survive `clear()`.
+
+    This surfaced as an order-dependent test failure: the recovery test below
+    meshed a cube at 2412 nodes in a full suite run and 337 on its own, because
+    a `mesh_step` earlier in the process had left `Mesh.ElementOrder = 2` set
+    and the cube inherited it -- a 7x node count from a scope that never asked
+    for second-order elements.
+
+    Production code was safe only by accident, since `mesh_step` sets every
+    option it depends on. The next helper that meshes without setting all of
+    them would have inherited a stale one, and its answer would have depended
+    on what ran before it.
+    """
+    gmsh = pytest.importorskip("gmsh", reason="Gmsh not installed")
+    from dynopt.fea.calculix import gmsh_model
+
+    def cube_nodes():
+        with gmsh_model("cube") as g:
+            g.model.occ.addBox(0, 0, 0, 10, 10, 10)
+            g.model.occ.synchronize()
+            g.option.setNumber("Mesh.CharacteristicLengthMax", 5.0)
+            g.model.mesh.generate(3)
+            return len(g.model.mesh.getNodes()[0])
+
+    clean = cube_nodes()
+    with gmsh_model("sets an option and leaves") as g:
+        g.option.setNumber("Mesh.ElementOrder", 2)
+    assert cube_nodes() == clean, (
+        "a later scope inherited Mesh.ElementOrder from an earlier one"
+    )
+
+
 def test_one_failed_mesh_does_not_poison_the_next():
     """The cascade that cost 44 of 48 designs in a DOE."""
     gmsh = pytest.importorskip("gmsh", reason="Gmsh not installed")
