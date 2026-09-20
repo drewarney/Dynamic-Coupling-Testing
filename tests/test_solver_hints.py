@@ -179,7 +179,7 @@ def test_every_design_in_the_box_meshes(part):
         tmp = tempfile.mkdtemp()
         try:
             part.export_step(d, os.path.join(tmp, "p.step"))
-            coords, _ = mesh_step(
+            coords, _, _ = mesh_step(
                 os.path.join(tmp, "p.step"), os.path.join(tmp, "m.inp"), cfg
             )
             assert coords.shape[0] > 0

@@ -85,7 +85,7 @@ def test_part_has_flat_mounting_face_at_origin(step_file, tmp_path):
         f"geometry extends to z={bb.zmin:.3f}; there is no flat bolt-down face"
     )
 
-    coords, _ = mesh_step(step_file, str(tmp_path / "flat.inp"), _cfg())
+    coords, _, _ = mesh_step(step_file, str(tmp_path / "flat.inp"), _cfg())
     on_plane = np.abs(coords[:, 2]) <= 1e-3
     assert on_plane.sum() > 50, (
         f"only {on_plane.sum()} nodes on z=0; the mounting face is not planar"
@@ -117,7 +117,7 @@ def test_deck_defines_the_element_set_it_references(step_file, tmp_path):
     from dynopt.fea.calculix import write_modal_deck
 
     inp = tmp_path / "mesh.inp"
-    coords, tags = mesh_step(step_file, str(inp), _cfg())
+    coords, tags, _ = mesh_step(step_file, str(inp), _cfg())
     cfg = _cfg()
     fixed = _select_fixed_nodes(coords, tags, cfg)
     deck = tmp_path / "job.inp"
@@ -137,7 +137,7 @@ def test_deck_defines_the_element_set_it_references(step_file, tmp_path):
 
 def test_empty_node_selection_raises(step_file, tmp_path):
     """A selector that matches nothing must fail loudly, not solve nonsense."""
-    coords, tags = mesh_step(step_file, str(tmp_path / "m.inp"), _cfg())
+    coords, tags, _ = mesh_step(step_file, str(tmp_path / "m.inp"), _cfg())
     bad = _cfg(fix_selector="z_plane", fix_plane=-999.0, fix_tol=1e-6)
     with pytest.raises(ValueError, match="matched no nodes"):
         _select_fixed_nodes(coords, tags, bad)
@@ -254,7 +254,7 @@ def test_designs_are_meshable_not_merely_valid(tmp_path):
         path = tmp_path / f"m{i}.step"
         try:
             MOTOR_MOUNT.export_step(params, str(path))
-            coords, _ = mesh_step(str(path), str(tmp_path / f"m{i}.inp"), _cfg())
+            coords, _, _ = mesh_step(str(path), str(tmp_path / f"m{i}.inp"), _cfg())
             if coords.shape[0] < 500:
                 failures.append(f"design {i}: only {coords.shape[0]} nodes")
         except Exception as exc:
@@ -303,6 +303,6 @@ def test_repeated_meshing_does_not_abort_the_process(step_file, tmp_path):
     between designs; this test pins that behaviour.
     """
     for i in range(12):
-        coords, tags = mesh_step(step_file, str(tmp_path / f"r{i}.inp"), _cfg())
+        coords, tags, _ = mesh_step(step_file, str(tmp_path / f"r{i}.inp"), _cfg())
         assert coords.shape[0] > 500
         assert tags.size == coords.shape[0]

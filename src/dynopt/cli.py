@@ -40,9 +40,22 @@ def _solver_for(args, part):
 
 
 def _payload_dof(res, direction: int = 0) -> int:
-    """A global DOF at the payload -- where a CLI demo should poke the structure."""
-    payload = res.meta.get("payload_nodes") or [0]
-    return int(payload[0]) * 6 + direction
+    """A global DOF at the payload -- where a CLI demo should poke the structure.
+
+    No fallback. This used to default to node 0 when a backend did not report
+    its payload nodes, which is every 3D result: on the motor mount node 0 is a
+    *clamped* base corner, so `dynopt coupling --backend calculix` hung its
+    dashpot on a constrained node and printed coupling numbers for it.
+    """
+    payload = res.meta.get("payload_nodes")
+    if not payload:
+        gaps = "; ".join(res.missing_contract()) or "the run may be deliberately bare"
+        raise SystemExit(
+            f"backend {res.meta.get('backend', '?')} reported no payload nodes, so "
+            f"there is nowhere meaningful to attach the damper ({gaps})"
+        )
+    per_node = int(res.meta.get("n_dof", 0)) // max(len(res.meta.get("nodes", [])), 1) or 6
+    return int(payload[0]) * per_node + direction
 
 
 def cmd_modal(args) -> int:

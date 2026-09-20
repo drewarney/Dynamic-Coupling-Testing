@@ -154,6 +154,17 @@ class ResonanceObjective:
 
     def __call__(self, freqs: np.ndarray, mass: float = 0.0, record: bool = False) -> float:
         f = np.atleast_1d(np.asarray(freqs, dtype=float))
+        # A nan mass produces a nan objective, and an optimiser comparing nan to
+        # nan neither fails nor converges -- it just returns whatever it started
+        # with. The 3D backend reported nan mass for its whole life, so
+        # `dynopt optimize --backend calculix` did exactly that. Refuse it here,
+        # where the cause is still visible.
+        if not np.isfinite(mass):
+            raise ValueError(
+                f"mass is {mass!r}: the objective divides by it, so every value "
+                "in the run would be nan. The solver that produced this result "
+                "does not report mass -- see ModalResult.missing_contract()."
+            )
         j_mass = self.w_mass * mass / max(self.mass_ref, 1e-12)
         j_res = self.w_resonance * self.risk(f)
         sep = self.min_separation(f)

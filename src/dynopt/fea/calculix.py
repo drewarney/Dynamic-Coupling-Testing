@@ -231,8 +231,13 @@ def mesh_step(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Mesh a STEP file with Gmsh and write an Abaqus/CalculiX ``.inp``.
 
-    Returns ``(node_coords, node_tags)``.  Gmsh writes Abaqus format natively,
-    which CalculiX reads with only minor keyword additions.
+    Returns ``(node_coords, node_tags, volume)``.  Gmsh writes Abaqus format
+    natively, which CalculiX reads with only minor keyword additions.
+
+    ``volume`` is summed from the solid elements, in the cube of the coordinate
+    unit. It is returned here because the element connectivity only exists
+    inside the meshing session, and a backend that cannot state the mass it
+    solved makes every objective downstream ``nan``.
     """
     with gmsh_model("part") as gmsh:
         gmsh.model.occ.importShapes(step_path)
@@ -280,9 +285,13 @@ def mesh_step(
         # array travel into node selection and surface as a numpy error about a
         # zero-size reduction.
         n_solid = 0
+        conns = []
         for _, vol in gmsh.model.getEntities(3):
-            for block in gmsh.model.mesh.getElements(3, vol)[1]:
-                n_solid += len(block)
+            etypes, _, enodes = gmsh.model.mesh.getElements(3, vol)
+            for etype, block in zip(etypes, enodes):
+                per = gmsh.model.mesh.getElementProperties(etype)[3]
+                n_solid += len(block) // max(per, 1)
+                conns.append((np.asarray(block, dtype=np.int64), per))
         if coords.shape[0] == 0 or n_solid == 0:
             raise RuntimeError(
                 f"Gmsh produced an empty mesh for {step_path} "
@@ -303,7 +312,32 @@ def mesh_step(
                     f"duplicate nodes across {n_vol} volumes: the solids are not "
                     "bonded and the model would be mechanically disconnected"
                 )
-        return coords, np.asarray(tags, dtype=int)
+        return coords, np.asarray(tags, dtype=int), _tet_volume(coords, tags, conns)
+
+
+def _tet_volume(coords: np.ndarray, tags: np.ndarray, conns) -> float:
+    """Summed tetrahedron volume, in the cube of the coordinate unit.
+
+    Straight-sided quadratic tets -- the shipped default, see
+    ``CalculiXConfig.second_order_linear`` -- put their corner nodes on the true
+    vertices, so the first four nodes of each element give the exact volume.
+
+    Measured from the mesh rather than the CAD on purpose: this is the volume
+    that was actually *solved*. Comparing it against the CAD volume is then a
+    check on the mesh, which is how ``tests/test_backend_contract.py`` uses it.
+    """
+    index = {int(t): i for i, t in enumerate(np.asarray(tags).ravel())}
+    total = 0.0
+    for block, per in conns:
+        if per < 4:
+            continue
+        for e in block.reshape(-1, per):
+            try:
+                p0, p1, p2, p3 = (coords[index[int(c)]] for c in e[:4])
+            except KeyError:  # pragma: no cover - node absent from the table
+                continue
+            total += abs(np.dot(np.cross(p1 - p0, p2 - p0), p3 - p0)) / 6.0
+    return float(total)
 
 
 def count_volumes(step_path: str) -> int:
@@ -676,7 +710,7 @@ class CalculiXSolver(ModalSolver):
             self.cad.export_step(params, step)
             h, hmin = self._mesh_sizes()
             mesh_cfg = replace(cfg, mesh_size=h, mesh_size_min=hmin)
-            coords, tags = mesh_step(step, mesh_inp, mesh_cfg)
+            coords, tags, volume = mesh_step(step, mesh_inp, mesh_cfg)
             fixed = _select_fixed_nodes(coords, tags, cfg)
 
             payload = None
@@ -697,21 +731,54 @@ class CalculiXSolver(ModalSolver):
                 )
 
             freqs = parse_dat_frequencies(job + ".dat")[:n_modes]
-            modes = None
+            modes, mode_tags = None, None
             if os.path.exists(job + ".frd"):
                 try:
-                    _, modes = parse_frd_modes(job + ".frd", n_modes)
+                    mode_tags, modes = parse_frd_modes(job + ".frd", n_modes)
                 except Exception:
-                    modes = None  # frequencies are still usable without shapes
+                    modes, mode_tags = None, None  # frequencies still usable
+
+            # The mode rows are ordered by the .frd's own sorted node tags,
+            # which is NOT the mesh's node order. Discarding those tags -- as
+            # this did -- leaves the mode shapes with no mapping back onto the
+            # geometry, so every consumer that wants to know where a mode moves
+            # is stuck. Re-order the coordinates to match the rows instead.
+            order = mode_tags if mode_tags is not None else tags
+            index = {int(t): i for i, t in enumerate(np.asarray(tags).ravel())}
+            keep = [index[int(t)] for t in np.asarray(order).ravel() if int(t) in index]
+            nodes = coords[keep]
+            tag_pos = {int(t): i for i, t in enumerate(np.asarray(order).ravel())}
+
+            payload_idx = (
+                [tag_pos[int(t)] for t in np.asarray(payload).ravel() if int(t) in tag_pos]
+                if payload is not None
+                else []
+            )
+
+            # mm/tonne/s by convention (see CalculiXConfig): mm^3 * tonne/mm^3
+            # gives tonne, and ModalResult.mass is documented in kg.
+            mass_kg = volume * float(cfg.rho) * 1000.0
+
+            n_dof = int(modes.shape[0]) if modes is not None else 3 * len(nodes)
+            per_node = n_dof // max(len(nodes), 1)
+            dof_map = np.column_stack([
+                np.repeat(np.arange(len(nodes)), per_node),
+                np.tile(np.arange(per_node), len(nodes)),
+            ]) if per_node else None
 
             return ModalResult(
                 frequencies=freqs,
                 modes=modes,
-                mass=float("nan"),
+                mass=mass_kg,
+                dof_map=dof_map,
                 meta={
                     "backend": self.name,
                     "params": dict(params),
                     **({"part": self.part} if self.part is not None else {}),
+                    "nodes": nodes,
+                    "payload_nodes": payload_idx,
+                    "n_dof": n_dof,
+                    "volume": volume,
                     "n_nodes": int(coords.shape[0]),
                     "mesh_size": h,
                     "mesh_size_min": hmin,
