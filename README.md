@@ -29,7 +29,9 @@ Cost: **64 beam-tier evaluations** to explore, **4 3D solves** to verify.
 The beam tier runs in ~11 ms and makes the design-space exploration possible.
 It is *not* quotable. Calibrated against seven mesh-converged 3D reference
 points, its error is design-dependent with **both signs**, from −27.1% to
-+4.8%, so no scalar correction removes it:
++4.8%, so no scalar correction removes it — a **design-dependent** one removes
+most of it, which is a different claim and is measured in
+[docs/06_MULTIFIDELITY.md](docs/06_MULTIFIDELITY.md):
 
 | | Tier 0 (beam) | Tier 1 (3D solid) | Tier 0 error |
 |---|---|---|---|
@@ -39,6 +41,16 @@ points, its error is design-dependent with **both signs**, from −27.1% to
 Two physical causes, both measured: leg slenderness (error correlates with
 `leg_thk` at r = −0.874; below L/d ≈ 4.5 beam theory stops representing a
 member) and plate aspect ratio (r = −0.780).
+
+**The plate correlation now has a mechanism, and it is narrower than "beam
+theory fails here".** Run the same mount with *no payload* and the two tiers
+agree to **0.8%** (beam 1262.2 Hz, 3D 1252.0 Hz) — the frame, legs and plate
+are all represented well. Adding the 350 g motor divides the beam tier's first
+frequency by 5.16x but the solid's by only 2.86x, because a point mass at the
+plate centre rests on four edge beams with no membrane action to resist it. The
+error is one missing piece of physics — the plate's local stiffness under a
+central mass — not a general failure of the idealisation. See
+[docs/06_MULTIFIDELITY.md](docs/06_MULTIFIDELITY.md) §6.6.
 
 **The optimiser converged to L/d = 4.00 — outside the beam tier's validated
 envelope.** That is not bad luck: raising frequency favours short stubby legs,
@@ -51,6 +63,24 @@ Here the beam tier erred *conservatively*, so the design is safe. Had it erred
 the other way, the beam-tier table would have shown a comfortable margin on a
 design that genuinely violated it — and nothing in that tier would have
 objected.
+
+### Can a learned correction make the beam tier quotable?
+
+Partly, and the honest answer is measured rather than asserted — 24 designs per
+part, all tiers, held out against 3D truth:
+
+| beam → 3D, held out | uncorrected | scalar | GP on the log-ratio |
+|---|---|---|---|
+| motor mount | 40.2% | 25.3% | **18.3%** |
+| cantilever arm | 21.0% | 13.2% | **4.9%** |
+
+At equal solver-seconds the correction wins while fine-tier data is scarce and
+stops mattering once it is not: the arm's fine-only GP overtakes it at 12 fine
+solves. Correcting the *coarse 3D* tier makes it worse — the discrepancy there
+(1.07%) is smaller than the noise a correction introduces.
+
+**18% is still not quotable**, so the 3D sign-off rule stands unchanged. Full
+results, method and the open questions: [docs/06_MULTIFIDELITY.md](docs/06_MULTIFIDELITY.md).
 
 ---
 

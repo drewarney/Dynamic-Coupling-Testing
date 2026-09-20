@@ -310,3 +310,50 @@ def test_an_explicit_zero_payload_stays_zero():
     pinned = _solver(part, payload_mass=1.25e-4)
     pinned._apply_part_hints(d)
     assert pinned.cfg.payload_mass == 1.25e-4
+
+
+@pytest.mark.slow
+def test_the_beam_tier_is_sound_until_it_is_loaded():
+    """docs/06 S6.6. The mount's beam error is a payload gap, not a frame gap.
+
+    Bare, the two tiers agree to under a percent. Loaded, they differ by 44%.
+    Both solve the same structure, so the error is in how each carries the
+    payload: a point mass at the plate centre rests on four edge beams with no
+    membrane action, and the plate is locally far too soft.
+
+    This is worth a test because it is the difference between "the beam tier is
+    unusable for this part" and "the beam tier has one fixable modelling gap",
+    and the first reading would retire a tier that is 2500x cheaper than 3D.
+    """
+    pytest.importorskip("gmsh", reason="Gmsh not installed")
+    pytest.importorskip("cadquery", reason="CadQuery not installed")
+    if shutil.which("ccx") is None:
+        pytest.skip("CalculiX (ccx) not on PATH")
+
+    from dynopt.fea.reference import modal_solve
+    from dynopt.geometry.motor_mount import build_frame
+
+    part = MOTOR_MOUNT
+    d = part.design_space.to_dict(part.design_space.defaults)
+
+    def solid(payload):
+        cfg = CalculiXConfig(n_modes=8, mesh_size=3.0, mesh_size_min=0.8,
+                             payload_mass=payload, payload_radius=24.0)
+        return CalculiXSolver(part, cfg).solve(d, n_modes=6).frequencies[0]
+
+    bare_frame = build_frame(d, motor_mass=0.0, motor_inertia=(0.0, 0.0, 0.0))
+    bare_err = abs(modal_solve(bare_frame, n_modes=6).frequencies[0] / solid(0.0) - 1.0)
+    assert bare_err < 0.05, (
+        f"bare structure disagrees by {100*bare_err:.1f}%; docs/06 S6.6 claims "
+        "under 1% and concludes the frame idealisation is sound"
+    )
+
+    loaded_err = abs(modal_solve(build_frame(d), n_modes=6).frequencies[0]
+                     / solid(3.5e-4) - 1.0)
+    assert loaded_err > 0.25, (
+        f"loaded tiers now agree to {100*loaded_err:.1f}%; if the payload gap "
+        "has been closed, docs/06 S6.6 needs rewriting"
+    )
+    assert loaded_err > 10 * bare_err, (
+        "the point of this test is that the loaded error dwarfs the bare one"
+    )

@@ -111,17 +111,42 @@ not very good.
 does not change the rule that anything published goes through a 3D sign-off
 (`examples/06_tier1_signoff.py`).
 
-The two parts differ by a factor of four in corrected error, and the reason is
-structural rather than statistical. Across its design box the mount's beam-tier
-ratio runs **1.029 to 4.170**; the arm's runs **0.984 to 1.173**. A clamped tube
-*is* a beam. A four-leg frame carrying a plate stops being one as the legs get
-stubby, and no amount of discrepancy modelling recovers a mode the idealisation
-never represented.
+The two parts differ by a factor of four in corrected error. Across its design
+box the mount's beam-tier ratio runs **1.029 to 4.170**; the arm's runs **0.984
+to 1.173**.
 
-So the operative rule is about the cheap tier, not the correction:
+**It is not that the mount's frame idealisation is bad.** Running the mount
+bare — no payload — the two tiers agree to **0.8%** (beam 1262.2 Hz, 3D
+1252.0 Hz). The frame, the legs and the plate are all represented well. The
+error appears only when the motor goes on:
+
+| motor_mount, default design | beam | 3D | |
+|---|---|---|---|
+| bare structure | 1262.2 Hz | 1252.0 Hz | **+0.8%** |
+| with 350 g payload | 244.6 Hz | 437.9 Hz | **−44.1%** |
+| effect of adding the payload | ÷5.16 | ÷2.86 | |
+
+The beam tier is nearly twice as sensitive to the payload as the solid is,
+because a point mass at the plate centre sits on four edge beams with no
+membrane action to resist it. The plate is locally far too soft, and that
+softness scales with plate thickness and span — which is why the earlier
+calibration found the error correlating with plate aspect ratio at r = −0.780.
+That correlation now has a mechanism.
+
+So the honest version of the rule is narrower and more useful than "the
+idealisation is wrong":
 
 > A learned discrepancy sharpens a cheap model that is already structurally
-> right. It cannot rescue one that is structurally wrong.
+> right. Where it struggles, look for a *specific* missing physics before
+> concluding the tier is unusable — the mount's 18% residual is one modelling
+> gap, not a general failure of beam theory.
+
+`examples/05_cross_solver_validation.py` prints this diagnostic, and
+`tests/test_solver_hints.py::test_the_beam_tier_is_sound_until_it_is_loaded`
+owns the numbers. Closing the gap — an effective plate stiffness under a
+central mass, or a shell element for the plate — is the highest-value follow-up
+this study produced, and it is worth more than any further work on the
+correction itself.
 
 **An open question, stated rather than assumed.** Within a single mount design
 the per-column ratios are not consistent — design 8 gives
