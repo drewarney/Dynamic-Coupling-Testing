@@ -130,6 +130,11 @@ def plate_geometry(params: dict[str, float], motor_dia: float = 0.028) -> dict:
 #: ``examples/05_cross_solver_validation.py``.
 PLATE_WIDTH_FACTOR = 1.0  # placeholder, calibrated below
 
+#: Effective-width multiplier on the plate's *spoke* members (stiffness only).
+#:
+#: Placeholder; calibrated immediately below against 3D.
+PLATE_SPOKE_FACTOR = 1.0
+
 #: How this part's modes group onto rigid-body motions of the payload.
 #:
 #: ``sway_rock`` deliberately merges the two lateral translations with the two
@@ -160,6 +165,7 @@ def build_frame(
     n_seg: int = 4,
     plate_mass_factor: float = PLATE_MASS_FACTOR,
     plate_width_factor: float = PLATE_WIDTH_FACTOR,
+    plate_spoke_factor: float = PLATE_SPOKE_FACTOR,
 ) -> FrameModel:
     """Space-frame idealisation of the motor mount.
 
@@ -193,8 +199,15 @@ def build_frame(
     # true plate of 4*top_span^2*t.
     alpha = max(plate_width_factor, 1e-6)
     plate_sec = Section.rectangle(max(alpha * top_span, 1e-4), pthk)
-    # Spokes from the platform corners to the motor node, same section.
-    spoke_sec = Section.rectangle(max(0.5 * alpha * top_span, 1e-4), pthk)
+    # Spokes from the platform corners to the motor node.
+    #
+    # Their effective width is NOT the same as the perimeter's. Four narrow
+    # strips in bending carry only a fraction of a plate's two-dimensional
+    # stiffness, and the payload sits right where that matters -- see
+    # PLATE_SPOKE_FACTOR.
+    spoke_sec = Section.rectangle(
+        max(0.5 * plate_spoke_factor * top_span, 1e-4), pthk
+    )
 
     corners = np.array([[1, 1], [-1, 1], [-1, -1], [1, -1]], dtype=float)
     nodes, elements, sections = [], [], []
