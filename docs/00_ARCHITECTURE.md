@@ -336,15 +336,22 @@ the same physics. They may differ by the beam idealisation and by nothing else:
 
 A clamped tube is very nearly a beam; a four-leg frame carrying a plate is not,
 and that 1.735 is precisely the error the multi-fidelity correction exists to
-remove. Both numbers are measured at the default design.
+remove.
+
+**Both numbers are the default design only, and that is deliberate.** The
+mount's ratio runs from 1.07 to 4.17 across its Sobol sample, because a beam
+idealisation degrades as the geometry leaves the slender regime. A bound loose
+enough to cover that box would catch almost nothing. Which designs have left
+the regime is `tier0_validity()`'s job; this check's job is the
+characterisation point, where a violation can only mean a modelling bug.
 
 `PartSpec.max_tier_ratio` makes each part state its bound, and
-`test_the_two_tiers_agree_to_within_the_idealisation` enforces it. This one
+`test_the_two_tiers_agree_at_the_default_design` enforces it. That one
 assertion catches the whole family: payload on the wrong face (the arm read
-2.97 before it was fixed), material in only one tier, supports on the wrong
-plane. None of them raises anything on its own -- they all just return a
-plausible number, and a discrepancy model downstream will happily absorb them
-as physics.
+2.97 before it was fixed, against a true 1.04), material in only one tier,
+supports on the wrong plane. None of them raises anything on its own -- they
+all just return a plausible number, and a discrepancy model downstream will
+happily absorb them as physics.
 
 ### 1.5.2 Element size is a property of the geometry
 

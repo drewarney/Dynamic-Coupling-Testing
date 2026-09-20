@@ -247,12 +247,13 @@ def test_payload_radius_that_selects_nothing_raises():
 
 @pytest.mark.slow
 @pytest.mark.parametrize("part", [MOTOR_MOUNT, CANTILEVER_ARM])
-def test_the_two_tiers_agree_to_within_the_idealisation(part):
+def test_the_two_tiers_agree_at_the_default_design(part):
     """The check that catches a whole class of silent modelling bugs.
 
     A part with both tiers gives two independent answers for the same physics.
-    They may differ by the beam idealisation and by nothing else. When they
-    differ by more, one tier is wrong -- and the ways it goes wrong (payload on
+    At the part's characterisation point they may differ by the beam
+    idealisation and by nothing else. When they differ by more, one tier is
+    wrong -- and the ways it goes wrong (payload on
     the wrong face, material copied into only one tier, supports on the wrong
     plane) all solve happily and return a number that reads like fidelity.
 

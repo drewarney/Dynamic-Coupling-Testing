@@ -186,7 +186,14 @@ class PartSpec(ABC):
 
     # -- tier 1 solver configuration -----------------------------------------
     #: How far the beam tier and the 3D tier may legitimately disagree on the
-    #: first frequency, as a ratio either way.
+    #: first frequency **at the part's default design**, as a ratio either way.
+    #:
+    #: Deliberately a single characterisation point, not a bound over the whole
+    #: design box. A beam idealisation degrades as the geometry leaves the
+    #: slender regime, so an honest box-wide bound would have to be loose
+    #: enough to catch almost nothing -- the motor mount measures 1.07 to 4.17
+    #: across its Sobol sample. Which designs have left that regime is
+    #: ``tier0_validity()``'s job, not this one.
     #:
     #: This is the *idealisation* error and nothing else. Anything larger is a
     #: modelling bug in one of the tiers, and the failures that produce one are
