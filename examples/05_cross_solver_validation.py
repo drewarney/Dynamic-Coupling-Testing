@@ -73,7 +73,7 @@ def main() -> int:
     )
     print(f"\n  structural mass:  beam {beam_bare.mass*1000:6.1f} g   "
           f"3D solid {solid_mass*1000:6.1f} g   "
-          f"({beam_bare.mass/solid_mass:.2f}x over-counted)")
+          f"(beam/3D = {beam_bare.mass/solid_mass:.2f}x)")
 
     print("\n  3D mesh convergence (bare structure):")
     f3d = None
@@ -84,15 +84,17 @@ def main() -> int:
               f"f1={r.frequencies[0]:8.1f} Hz{d}")
         f3d = r.frequencies[0]
 
-    print(f"\n  BARE STRUCTURE")
+    bare_err = 100 * (beam_bare.frequencies[0] - f3d) / f3d
+    print(f"\n  BARE STRUCTURE  (payload_mass=0.0, explicitly)")
     print(f"    beam f1      {beam_bare.frequencies[0]:8.1f} Hz")
-    print(f"    3D   f1      {f3d:8.1f} Hz     beam is "
-          f"{100*(beam_bare.frequencies[0]-f3d)/f3d:+.1f}%")
+    print(f"    3D   f1      {f3d:8.1f} Hz     beam is {bare_err:+.1f}%")
     corrected = beam_bare.frequencies[0] * np.sqrt(beam_bare.mass / solid_mass)
+    rescaled_err = 100 * (corrected - f3d) / f3d
     print(f"    beam f1 rescaled by sqrt(m_beam/m_3d) = {corrected:8.1f} Hz     "
-          f"residual {100*(corrected-f3d)/f3d:+.1f}%")
-    print("    -> the mass over-count explains most of the gap; what remains is"
-          "\n       genuine plate-flexibility idealisation error.")
+          f"residual {rescaled_err:+.1f}%")
+    if abs(bare_err) < abs(rescaled_err):
+        print("    -> unloaded, the two tiers already agree; the mass difference"
+              "\n       is not what drives the error, and correcting for it hurts.")
 
     print("\n  LOADED (350 g payload)")
     loaded = CalculiXSolver(cad, cfg(3.0, payload=3.5e-4)).solve(params, n_modes=8)
@@ -102,7 +104,25 @@ def main() -> int:
         e = 100 * (beam.frequencies[i] - loaded.frequencies[i]) / loaded.frequencies[i]
         print(f"      {i+1}     {beam.frequencies[i]:9.1f}   {loaded.frequencies[i]:9.1f}   {e:+8.1f}%")
 
-    print("\n  VERDICT: the beam tier under-predicts frequency, i.e. it is")
+    # The diagnostic this example exists for: not "how wrong is the beam tier"
+    # but *where* it goes wrong. Both tiers are solving the same structure, so
+    # if they agree bare and disagree loaded, the error is in how each carries
+    # the payload -- not in the structural idealisation.
+    drop_beam = beam_bare.frequencies[0] / beam.frequencies[0]
+    drop_3d = f3d / loaded.frequencies[0]
+    loaded_err = 100 * (beam.frequencies[0] - loaded.frequencies[0]) / loaded.frequencies[0]
+    print(f"\n  WHERE THE ERROR LIVES")
+    print(f"    unloaded, beam vs 3D          {bare_err:+8.1f}%")
+    print(f"    loaded,   beam vs 3D          {loaded_err:+8.1f}%")
+    print(f"    adding the payload divides f1 by {drop_beam:5.2f}x (beam) "
+          f"vs {drop_3d:5.2f}x (3D)")
+    if abs(bare_err) < 0.25 * abs(loaded_err):
+        print("    -> the structural idealisation is sound; the beam tier is far")
+        print("       more sensitive to the payload than the solid is. A point")
+        print("       mass on a 4-edge-beam plate has no membrane action to")
+        print("       resist it, so the plate is locally far too soft.")
+
+    print("\n  VERDICT: the beam tier under-predicts loaded frequency, i.e. it is")
     print("  conservative for resonance avoidance but not quantitatively")
     print("  accurate. Use it for DOE and surrogate training; re-verify any")
     print("  final design on Tier 1 before quoting numbers.")
