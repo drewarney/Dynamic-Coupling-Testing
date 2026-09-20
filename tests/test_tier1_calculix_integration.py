@@ -46,9 +46,9 @@ SPACE = MOTOR_MOUNT_SPACE
 
 
 def _cfg(**kw):
-    """mm / tonne / s: E in MPa, rho in tonne/mm^3 to match CadQuery's mm."""
+    """mm / tonne / s. Material is left to the part, which owns it."""
     base = dict(
-        E=68900.0, nu=0.33, rho=2.7e-9, n_modes=6,
+        n_modes=6,
         mesh_size=5.0, mesh_size_min=1.2,
         fix_selector="z_plane", fix_plane=0.0, fix_tol=1e-3,
     )

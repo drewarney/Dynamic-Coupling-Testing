@@ -185,6 +185,21 @@ class PartSpec(ABC):
         return nodes.mean(axis=0)
 
     # -- tier 1 solver configuration -----------------------------------------
+    #: How far the beam tier and the 3D tier may legitimately disagree on the
+    #: first frequency, as a ratio either way.
+    #:
+    #: This is the *idealisation* error and nothing else. Anything larger is a
+    #: modelling bug in one of the tiers, and the failures that produce one are
+    #: exactly the failures nothing else catches: a payload smeared onto the
+    #: wrong face, a material copied by hand into only one tier, a support
+    #: clamped on the wrong plane. Each of those solves happily and returns a
+    #: number that reads like fidelity.
+    #:
+    #: A tube is a good beam, so the arm declares 1.20. A four-leg frame with a
+    #: plate is a poor one, so the mount declares 2.00. Tightening this is how a
+    #: part says its idealisation is trustworthy.
+    max_tier_ratio: float = 2.0
+
     def solver_hints(self, params: dict[str, float]) -> dict:
         """Geometry-dependent settings the 3D backend cannot infer itself.
 
@@ -194,8 +209,8 @@ class PartSpec(ABC):
         a failure that solves happily and reports confident nonsense.
 
         Recognised keys: ``fix_selector``, ``fix_plane``, ``fix_tol``,
-        ``payload_mass``, ``payload_radius``, ``min_feature``, ``E``, ``nu``,
-        ``rho``.
+        ``payload_mass``, ``payload_selector``, ``payload_radius``,
+        ``min_feature``, ``E``, ``nu``, ``rho``.
 
         The material belongs here for the same reason the supports do: the beam
         tier reads it from the part, so if the 3D tier does not, the two tiers

@@ -51,11 +51,12 @@ def main() -> int:
     cad = MOTOR_MOUNT
 
     # CadQuery exports millimetres, so the solver runs in mm / tonne / s:
-    # E in MPa and rho in tonne/mm^3. Feeding it SI values with mm geometry is
-    # the classic automation error and scales every frequency by ~31x.
+    # No E/nu/rho here: the part supplies them, so the two tiers cannot end up
+    # modelling different materials. (They are AL6061 either way, in MPa and
+    # tonne/mm^3 -- feeding a mm model SI values scales every frequency ~31x.)
     def cfg(h, payload=0.0):
         return CalculiXConfig(
-            E=68900.0, nu=0.33, rho=2.7e-9, n_modes=8,
+            n_modes=8,
             mesh_size=h, mesh_size_min=min(0.8, h / 4),
             fix_selector="z_plane", fix_plane=0.0, fix_tol=1e-3,
             payload_mass=payload, payload_radius=24.0,

@@ -69,9 +69,10 @@ def main(argv):
     for k, v in params.items():
         print(f"  {k:<14s} {v*1000:8.3f} mm")
 
+    # Material comes from the part; see example 05.
     def cfg(h):
         return CalculiXConfig(
-            E=68900.0, nu=0.33, rho=2.7e-9, n_modes=8,
+            n_modes=8,
             mesh_size=h, mesh_size_min=min(0.8, h / 4),
             fix_selector="z_plane", fix_plane=0.0, fix_tol=1e-3,
             payload_mass=PAYLOAD_TONNE, payload_radius=0.0,

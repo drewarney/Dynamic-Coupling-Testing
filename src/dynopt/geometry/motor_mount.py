@@ -273,6 +273,10 @@ class MotorMount(PartSpec):
     """
 
     name = "motor_mount"
+    # A four-leg frame carrying a plate is a weak beam idealisation: measured
+    # 1.735 at the default design (beam 244.6 Hz, 3D 424.4 Hz). This is the
+    # error the multi-fidelity correction exists to remove.
+    max_tier_ratio = 2.00
 
     def __init__(
         self,

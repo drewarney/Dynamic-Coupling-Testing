@@ -19,6 +19,8 @@ into: the toolchain kept working and the numbers stayed plausible.
 Only the last needs Gmsh installed.
 """
 
+import shutil
+
 import numpy as np
 import pytest
 
@@ -187,3 +189,95 @@ def test_every_design_in_the_box_meshes(part):
             _shutil.rmtree(tmp, ignore_errors=True)
 
     assert not failures, f"{len(failures)}/24 designs lost: {failures}"
+
+
+# ---------------------------------------------------------------------------
+# Payload placement: the defect that read like fidelity
+# ---------------------------------------------------------------------------
+def test_payload_face_follows_the_part_axis():
+    """``_select_payload_nodes`` must honour the part's axis, not assume z.
+
+    The selector was hardcoded to z, with the radius measured from the z axis.
+    That is a motor mount's shape. The cantilever arm runs along +x, so the
+    same code selected nodes near the *root* collar -- and smeared the 85 g tip
+    motor onto the clamped end, where it does no work at all.
+    """
+    from dynopt.fea.calculix import _select_payload_nodes
+
+    # A 200 x 20 x 20 lattice standing in for an arm along +x.
+    xs = np.linspace(0.0, 200.0, 21)
+    ys = zs = np.linspace(-10.0, 10.0, 5)
+    coords = np.array([(x, y, z) for x in xs for y in ys for z in zs])
+    tags = np.arange(1, len(coords) + 1)
+
+    cfg = CalculiXConfig(payload_selector="x_max", payload_radius=14.4, fix_tol=1e-3)
+    tip = _select_payload_nodes(coords, tags, cfg)
+    assert tip.size > 0
+    assert np.allclose(coords[tip - 1][:, 0], 200.0), "payload is not on the tip"
+
+    cfg.payload_selector = "z_max"
+    top = _select_payload_nodes(coords, tags, cfg)
+    assert not set(tip.tolist()) & set(top.tolist()), (
+        "the two faces must be different sets, or the selector is ignoring the axis"
+    )
+
+
+def test_payload_selector_rejects_nonsense():
+    from dynopt.fea.calculix import _select_payload_nodes
+
+    coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    tags = np.array([1, 2])
+    for bad in ("w_max", "x_middle", "xmax"):
+        with pytest.raises(ValueError, match="payload_selector"):
+            _select_payload_nodes(coords, tags, CalculiXConfig(payload_selector=bad))
+
+
+def test_payload_radius_that_selects_nothing_raises():
+    from dynopt.fea.calculix import _select_payload_nodes
+
+    # The node on the y_max face sits 8.6 mm off the y axis, so a radius that
+    # small cannot reach it. (A node *on* the axis would be selected, which is
+    # why the first version of this test failed to raise.)
+    coords = np.array([[0.0, 0.0, 0.0], [5.0, 50.0, 7.0]])
+    tags = np.array([1, 2])
+    cfg = CalculiXConfig(payload_selector="y_max", payload_radius=1e-6)
+    with pytest.raises(ValueError, match="selected no nodes"):
+        _select_payload_nodes(coords, tags, cfg)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("part", [MOTOR_MOUNT, CANTILEVER_ARM])
+def test_the_two_tiers_agree_to_within_the_idealisation(part):
+    """The check that catches a whole class of silent modelling bugs.
+
+    A part with both tiers gives two independent answers for the same physics.
+    They may differ by the beam idealisation and by nothing else. When they
+    differ by more, one tier is wrong -- and the ways it goes wrong (payload on
+    the wrong face, material copied into only one tier, supports on the wrong
+    plane) all solve happily and return a number that reads like fidelity.
+
+    Measured at the default design: arm 113.7 -> 118.5 Hz (1.042), mount
+    244.6 -> 424.4 Hz (1.735). Before the payload fix the arm read 337.9 Hz,
+    a ratio of 2.97, and nothing in the pipeline objected.
+    """
+    pytest.importorskip("gmsh", reason="Gmsh not installed")
+    pytest.importorskip("cadquery", reason="CadQuery not installed")
+    if shutil.which("ccx") is None:
+        pytest.skip("CalculiX (ccx) not on PATH")
+
+    from dynopt.fea.reference import ReferenceFrameSolver
+
+    sp = part.design_space
+    d = sp.to_dict(sp.defaults)
+    beam = ReferenceFrameSolver(part).solve(d, n_modes=6).frequencies[0]
+    solid = (
+        CalculiXSolver(part, CalculiXConfig(n_modes=8, mesh_size=3.0, mesh_size_min=0.75))
+        .solve(d, n_modes=6)
+        .frequencies[0]
+    )
+    ratio = solid / beam
+    assert 1.0 / part.max_tier_ratio <= ratio <= part.max_tier_ratio, (
+        f"{part.name}: beam {beam:.1f} Hz vs 3D {solid:.1f} Hz is {ratio:.3f}x, "
+        f"outside the declared idealisation bound {part.max_tier_ratio:.2f}. "
+        "One of the tiers is modelling something the other is not."
+    )

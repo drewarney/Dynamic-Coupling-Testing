@@ -161,6 +161,10 @@ class CalculiXConfig:
     fix_selector: str = "z_min"       # "z_min" | "z_plane" | "all"
     fix_plane: float = 0.0            # used when fix_selector == "z_plane"
     fix_tol: float = 1e-3             # ABSOLUTE, in model units (mm)
+    # Which face the payload sits on: "<x|y|z>_<min|max>". The radius is
+    # measured in the plane perpendicular to that axis. A part declares it,
+    # because where the motor bolts on is a property of the geometry.
+    payload_selector: str = "z_max"
     solid_type: str = "C3D10"         # element type to keep from the gmsh mesh
     # Gmsh's high-order optimiser pulls mid-side nodes onto the true CAD
     # surface, which is worth a little accuracy on curved features. It is also
@@ -301,6 +305,55 @@ def count_volumes(step_path: str) -> int:
         gmsh.model.occ.importShapes(step_path)
         gmsh.model.occ.synchronize()
         return len(gmsh.model.getEntities(3))
+
+
+def _select_payload_nodes(coords: np.ndarray, tags: np.ndarray, cfg: CalculiXConfig):
+    """Nodes carrying the smeared payload: a disc on one face of the part.
+
+    ``payload_selector`` names the face (``"z_max"`` for a mount's platform,
+    ``"x_max"`` for an arm's tip boss) and ``payload_radius`` is measured in the
+    plane perpendicular to that axis.
+
+    This was hardcoded to ``z`` with the radius measured from the z axis, which
+    is a motor mount's shape. On the cantilever arm -- which runs along x -- it
+    selected nodes near the *root* collar and smeared the motor there. The arm
+    solved happily and reported 338 Hz where a clamped tube with an 85 g tip
+    mass gives 116 Hz: the payload was attached where it does no work. Nothing
+    in the pipeline objected, and the 3x error reads exactly like a
+    beam-idealisation discrepancy waiting to be "corrected".
+    """
+    axes = {"x": 0, "y": 1, "z": 2}
+    try:
+        axis_name, kind = cfg.payload_selector.split("_", 1)
+        axis = axes[axis_name]
+    except (ValueError, KeyError):
+        raise ValueError(
+            f"unknown payload_selector {cfg.payload_selector!r}; expected "
+            "'<x|y|z>_<min|max>'"
+        ) from None
+
+    v = coords[:, axis]
+    if kind == "max":
+        on_face = v >= v.max() - cfg.fix_tol
+    elif kind == "min":
+        on_face = v <= v.min() + cfg.fix_tol
+    else:
+        raise ValueError(
+            f"unknown payload_selector {cfg.payload_selector!r}; expected "
+            "'<x|y|z>_<min|max>'"
+        )
+
+    perp = [i for i in range(3) if i != axis]
+    rad = np.hypot(coords[:, perp[0]], coords[:, perp[1]])
+    sel = on_face & (rad <= cfg.payload_radius)
+    if not sel.any():
+        reach = rad[on_face].max() if on_face.any() else float("nan")
+        raise ValueError(
+            f"payload_radius={cfg.payload_radius:g} selected no nodes on the "
+            f"{cfg.payload_selector} face ({int(on_face.sum())} nodes there, "
+            f"largest radius {reach:.3g})"
+        )
+    return tags[sel]
 
 
 def _select_fixed_nodes(coords: np.ndarray, tags: np.ndarray, cfg: CalculiXConfig):
@@ -616,17 +669,7 @@ class CalculiXSolver(ModalSolver):
 
             payload = None
             if cfg.payload_mass > 0.0:
-                z = coords[:, 2]
-                rad = np.hypot(coords[:, 0], coords[:, 1])
-                on_top = z >= z.max() - cfg.fix_tol
-                within = rad <= cfg.payload_radius
-                payload = tags[on_top & within]
-                if payload.size == 0:
-                    raise ValueError(
-                        f"payload_radius={cfg.payload_radius:g} selected no nodes "
-                        f"on the top face (max radius there "
-                        f"{rad[on_top].max() if on_top.any() else float('nan'):.3g})"
-                    )
+                payload = _select_payload_nodes(coords, tags, cfg)
             write_modal_deck(mesh_inp, job + ".inp", fixed, cfg, payload_tags=payload)
 
             proc = subprocess.run(

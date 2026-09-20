@@ -174,11 +174,14 @@ mapdl.antype("MODAL");  mapdl.pstres("ON"); mapdl.solve()
 The pipeline holds no knowledge of any specific geometry. A part is one class:
 
 ```python
-from dynopt.geometry.base import PartSpec, DesignSpace, DesignVariable
+from dynopt.geometry.base import (
+    PartSpec, DesignSpace, DesignVariable, material_hints,
+)
 from dynopt.dynamics.modal import ModeFamilySpec
 
 class DroneArm(PartSpec):
     name = "drone_arm"
+    max_tier_ratio = 1.20        # a tube is very nearly a beam
 
     @property
     def design_space(self):
@@ -202,7 +205,15 @@ class DroneArm(PartSpec):
         ...  # -> CadQuery Workplane
 
     def solver_hints(self, params):          # optional
-        return {"fix_selector": "z_plane", "fix_plane": 0.0}
+        # Re-read for every design, so anything derived from `params` is
+        # computed here rather than cached.
+        return {
+            "fix_selector": "x_plane", "fix_plane": 0.0,   # clamped root
+            "payload_selector": "x_max",                   # motor on the tip
+            "payload_mass": 8.5e-5, "payload_radius": 14.4,
+            "min_feature": 1000.0 * params["thk"],         # thinnest wall [mm]
+            **material_hints("CFRP_QI"),                   # both tiers, one source
+        }
 ```
 
 Then register it in `geometry/registry.py` and it is available everywhere —
@@ -218,14 +229,24 @@ against the closed-form Rayleigh estimate.
 | `mode_families` | Which rigid-body motions form a family is a property of the structure. "Bounce / sway-rock / torsion" means nothing without a payload on supports. |
 | `classification_origin` | Rigid-body motion is measured about *something* — a payload, a sensor seat, a bearing. |
 | `solver_hints` (BCs) | A selector like "clamp the lowest face" silently picks the wrong face once a design variable moves geometry. The part knows which face is the mounting plane; the solver does not. |
+| `solver_hints` (payload face) | Same reason, and it bit harder: "the top face" is a motor mount's opinion. The arm runs along x, and the mount-shaped selector put its tip motor on its clamped root. |
+| `solver_hints` (material) | Both tiers need it. Two copies means they can disagree, and they did — a carbon arm solved as aluminium, which reads as a 1.31x fidelity gap. |
+| `min_feature` | The smallest wall or bore is the part's to know, and it is what stops a mesher from rejecting the design outright (§1.5.2). |
+| `max_tier_ratio` | How far the two tiers may legitimately disagree is a property of how beam-like the part is, not of the solver (§1.5.3). |
 | Tier availability | A beam idealisation is right for frame-like parts and simply wrong for bulky solids. The part declares which tiers it supports. |
 
 ### Which tiers to implement
 
 Implement `build_frame` only when the part is genuinely frame-like — struts,
 arms, brackets built from slender members. For a bulky solid a beam model is
-not approximate, it is wrong, and no validity envelope rescues it. Such a part
-supplies `build_cad` only and runs coarse-mesh 3D as its cheap tier.
+not approximate, it is wrong, and no validity envelope rescues it.
+
+Such a part supplies `build_cad` only — but do not assume a coarse mesh gives
+it a cheap tier. Measured on both parts here, the mesh cost is set by the thin
+curved features that have to be resolved at all, not by the global target size,
+so a coarse 3D solve is only ~1.6x faster than a converged one and differs from
+it by under 1% (§1.5.2). For a part whose cost is feature-dominated, "coarse
+3D" is not a fidelity tier; it is the same solve with a worse answer.
 
 ## 1.5 Tier 1 hardening: what actually breaks
 
@@ -270,6 +291,7 @@ single solve cannot reach. `tests/test_solver_hints.py` owns them.
 | A failed mesh poisons the shared Gmsh session | Every later `generate` returns an **empty** mesh | No exception at the point of failure; it surfaces as a numpy "zero-size reduction" in node selection, hundreds of lines downstream |
 | Hints written once, then frozen | Design 2..N silently reuse design 1's payload radius and mesh settings | Every value is plausible; the solve converges |
 | Element size fixed independently of the design | Designs whose bore is smaller than an element are rejected outright | The DOE simply has fewer rows than it asked for |
+| Payload node selection hardcoded to the z axis | The arm's tip motor was smeared onto its clamped **root** | The solve converges; the arm reads 338 Hz instead of 118 Hz, which looks exactly like a fidelity gap |
 
 The first cost 44 of 48 designs in one run: design 4 of the first part failed
 legitimately, and designs 5-23 plus the entire second part were lost to the
@@ -296,6 +318,33 @@ Three more rules:
    part's apparent beam-to-3D discrepancy was the material, and a
    multi-fidelity correction would have learned it as physics. Anything both
    tiers need comes from one place: `PartSpec`.
+8. **Anything expressed as "the top face" is a part's opinion, not a law.**
+   Both the support selector and the payload selector were written for a motor
+   mount, which stands on z=0 and carries its motor on z=max. The cantilever
+   arm runs along x, so the same code clamped and loaded the wrong faces. Both
+   selectors now take `"<axis>_<min|max>"` from the part.
+
+### 1.5.3 Two tiers are a free consistency check -- use it
+
+A part with both a beam tier and a 3D tier gives two independent answers for
+the same physics. They may differ by the beam idealisation and by nothing else:
+
+| Part | Beam | 3D | Ratio | Declared bound |
+|---|---|---|---|---|
+| `cantilever_arm` | 113.7 Hz | 118.5 Hz | **1.042** | 1.20 |
+| `motor_mount` | 244.6 Hz | 424.4 Hz | **1.735** | 2.00 |
+
+A clamped tube is very nearly a beam; a four-leg frame carrying a plate is not,
+and that 1.735 is precisely the error the multi-fidelity correction exists to
+remove. Both numbers are measured at the default design.
+
+`PartSpec.max_tier_ratio` makes each part state its bound, and
+`test_the_two_tiers_agree_to_within_the_idealisation` enforces it. This one
+assertion catches the whole family: payload on the wrong face (the arm read
+2.97 before it was fixed), material in only one tier, supports on the wrong
+plane. None of them raises anything on its own -- they all just return a
+plausible number, and a discrepancy model downstream will happily absorb them
+as physics.
 
 ### 1.5.2 Element size is a property of the geometry
 

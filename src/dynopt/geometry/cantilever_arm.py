@@ -87,6 +87,9 @@ class CantileverArm(PartSpec):
     """Drone arm: cantilever tube, motor at the tip."""
 
     name = "cantilever_arm"
+    # A clamped tube is very nearly a beam: measured 1.042 at the default
+    # design (beam 113.7 Hz, 3D 118.5 Hz).
+    max_tier_ratio = 1.20
 
     def __init__(
         self,
@@ -158,6 +161,8 @@ class CantileverArm(PartSpec):
             "fix_plane": 0.0,
             "fix_tol": 1e-3,
             "payload_mass": self.tip_mass * 1e-3,   # mm / tonne / s
+            # The arm runs along +x, so the motor sits on the x_max face.
+            "payload_selector": "x_max",
             "payload_radius": max(self.boss_dia * mm * 0.6, 6.0),
             "min_feature": min(thin),
             **material_hints(self.material),

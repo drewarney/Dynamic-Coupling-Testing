@@ -101,13 +101,27 @@ because trust has to be inspectable.
 | 1 | `PartSpec` plugin boundary; port the mount onto it | 1 session |
 | 2 | Band-risk regression target; demote mode tracking to reporting | 1 session |
 | 3 | Second part (drone arm) — proves generality empirically | 1 session |
-| 4 | Coarse-3D Tier 0 + multi-fidelity GP (arbitrary geometry) | 2–3 sessions |
+| 4 | ~~Coarse-3D Tier 0~~ + multi-fidelity GP (arbitrary geometry) | 2–3 sessions |
 | 5 | Random-vibration/PSD objective — the qual wedge | 2 sessions |
 | 6 | Mesh morphing / FFD for non-parametric STEP | 3–4 sessions |
 | 7 | Physical hammer test on the mount | 1 weekend + hardware |
 
 Items 1–3 are the generalisation proof. Item 5 is what makes it sellable.
 Item 7 is what makes anyone believe it.
+
+**On item 4 — coarse-3D is struck out, and that is a result.** The plan was a
+coarse mesh as the cheap tier for parts too bulky for a beam. Measured on both
+parts, it does not exist: once the mesh resolves the thin curved features it
+has to resolve at all, the global target size barely moves the node count. A
+7 mm target and a converged 3 mm target differ by 1.6x in cost and under 1% in
+answer (`docs/00_ARCHITECTURE.md` §1.5.2). There is no discrepancy worth
+learning and no speed worth having. The multi-fidelity work therefore stands or
+falls on the **beam** tier, which is ~2500x cheaper and genuinely wrong — 1.735x
+at the mount's default design.
+
+That leaves the original gap open: a bulky solid still has no cheap tier. The
+honest options are a reduced-order model (Craig-Bampton on a fixed mesh) or
+accepting 3D cost for such parts. Neither is a coarse mesh.
 
 **On item 6 — the honest caveat.** Morphing optimises arbitrary geometry without
 parameters, which is the generality unlock. But it returns a deformed *mesh*,
