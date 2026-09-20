@@ -29,5 +29,12 @@ dynopt = "dynopt.cli:main"
 where = ["src"]
 
 [tool.pytest.ini_options]
+markers = ["slow: meshes or solves for minutes; deselect with -m 'not slow'"]
 testpaths = ["tests"]
 filterwarnings = ["ignore::DeprecationWarning"]
+# Put src/ on sys.path for the test run. Without this the suite depends
+# entirely on the editable install staying intact, and when anything disturbs
+# it every test module fails at collection with ModuleNotFoundError -- a
+# failure mode that looks like broken code and is broken environment.
+# `pip uninstall dynopt -y && pytest -q` must pass.
+pythonpath = ["src"]

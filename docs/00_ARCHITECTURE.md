@@ -259,6 +259,72 @@ Three rules follow, and they generalise well beyond this part:
 toolchain (CadQuery -> Gmsh -> CalculiX); unit tests on the beam tier cannot
 catch any of these.
 
+### 1.5.1 What breaks at DOE scale
+
+Solving *one* design and solving *hundreds* are different problems. A 48-design
+paired run (24 designs x 2 parts x 3 tiers) surfaced three more defects that a
+single solve cannot reach. `tests/test_solver_hints.py` owns them.
+
+| Defect | Symptom | Why it is silent |
+|---|---|---|
+| A failed mesh poisons the shared Gmsh session | Every later `generate` returns an **empty** mesh | No exception at the point of failure; it surfaces as a numpy "zero-size reduction" in node selection, hundreds of lines downstream |
+| Hints written once, then frozen | Design 2..N silently reuse design 1's payload radius and mesh settings | Every value is plausible; the solve converges |
+| Element size fixed independently of the design | Designs whose bore is smaller than an element are rejected outright | The DOE simply has fewer rows than it asked for |
+
+The first cost 44 of 48 designs in one run: design 4 of the first part failed
+legitimately, and designs 5-23 plus the entire second part were lost to the
+cascade behind it. The log said `FAILED` 44 times with an error that named
+nothing real.
+
+Three more rules:
+
+4. **A failure must not outlive its design.** A shared resource kept alive for
+   speed -- a Gmsh session, a solver process, a meshing kernel -- has to be
+   reset when anything using it throws. `gmsh.clear()` is not a reset.
+5. **"Differs from the default" cannot mean "the caller set it."** Once the
+   first design writes a derived value into a config, every later design sees a
+   non-default value and stops updating. Record what the caller pinned *at
+   construction*, and recompute everything else per design.
+6. **Element size belongs to the geometry, not the budget.** A fixed mesh size
+   is not portable across a design space: the thinnest design in the box sets
+   the floor. A part declares its smallest feature (`min_feature`) and the
+   backend refines to match -- see §1.5.2 for why that refinement has to be
+   *local*.
+7. **The tiers must differ in fidelity and nothing else.** The beam tier read
+   its material from the part; the 3D tier had it written out by hand in the
+   calling script, which used aluminium for a carbon arm. A third of that
+   part's apparent beam-to-3D discrepancy was the material, and a
+   multi-fidelity correction would have learned it as physics. Anything both
+   tiers need comes from one place: `PartSpec`.
+
+### 1.5.2 Element size is a property of the geometry
+
+The coarse tier asks for 6 mm elements. One sampled arm is an 11 mm tube with a
+5.5 mm bore: no 6 mm tet can wrap that annulus, Gmsh rejects the surface mesh as
+"overlapping facets", and the design is silently absent from the DOE.
+
+Three strategies, measured over the same 24 Sobol designs of each part at a
+6 mm target (`tests/test_solver_hints.py::test_every_design_in_the_box_meshes`):
+
+| Strategy | Designs meshed | Median nodes (mount / arm) |
+|---|---|---|
+| Fixed element size | 39/48 | 22.2k / 5.3k |
+| Global cap at `min_feature` | 48/48, but unusable | 159k on one coarse mesh |
+| **Curvature-driven local refinement** | **48/48** | 37.4k / 9.7k |
+
+The global cap is the obvious fix and the wrong one: it refines the *whole*
+part to suit its thinnest wall, so it capped every design in both boxes, ten of
+them finer than the fine tier itself. A tier that is more expensive than the
+tier it approximates has no reason to exist.
+
+Curvature-driven sizing refines only what an element has to wrap -- bores, tube
+walls, fillets -- and leaves flat regions at the target size. Every failure a
+fixed size produced was on a curved thin feature, which is exactly what it
+addresses. It costs 1.7x the nodes and buys back nine designs in 48.
+
+`min_feature` survives in a smaller role: it lowers `mesh_size_min` so the
+curvature field is not clamped away from below.
+
 ## 1.6 Licensing — decide this before you write a business plan
 
 | Component | Licence | Commercial use |

@@ -15,6 +15,12 @@ Usage::
     python examples/06_tier1_signoff.py optimum.json
 """
 
+import sys as _sys
+from pathlib import Path as _Path
+
+# Run straight from a checkout, with or without an editable install.
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
+
 import json
 import shutil
 import sys

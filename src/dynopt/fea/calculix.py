@@ -35,7 +35,7 @@ import shutil
 import subprocess
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import scipy.sparse as sp
@@ -91,19 +91,48 @@ def _shutdown_gmsh():  # pragma: no cover - runs at interpreter exit
         pass
 
 
+def _reset_gmsh():
+    """Tear the Gmsh library down and bring it back up.
+
+    Only ever called after a failure. ``gmsh.clear()`` is not enough to recover
+    from one: once ``mesh.generate`` has thrown, the session keeps accepting
+    calls but every later ``generate`` returns an *empty* mesh, and the error
+    surfaces hundreds of lines downstream as an empty-array reduction. One bad
+    design in a DOE therefore poisons every design after it.
+
+    Repeated init/finalise cycles are what ``_ensure_gmsh`` exists to avoid, so
+    this stays bounded to the failure path: a DOE of hundreds of designs still
+    runs on one session unless something actually breaks.
+    """
+    global _GMSH_STARTED
+    try:
+        import gmsh
+
+        if gmsh.isInitialized():
+            gmsh.finalize()
+    except Exception:  # pragma: no cover - best effort teardown
+        pass
+    _GMSH_STARTED = False
+
+
 @contextmanager
 def gmsh_model(name: str = "part"):
     """Scoped Gmsh model on the shared session.
 
-    Clears the previous model rather than tearing down the library. Use this
-    everywhere instead of ``gmsh.initialize()`` / ``gmsh.finalize()``.
+    Clears the previous model rather than tearing down the library, *except*
+    when the body raises -- see :func:`_reset_gmsh` for why a failure has to
+    take the whole session with it. Use this everywhere instead of
+    ``gmsh.initialize()`` / ``gmsh.finalize()``.
     """
     gmsh = _ensure_gmsh()
     gmsh.clear()
     gmsh.model.add(name)
     try:
         yield gmsh
-    finally:
+    except BaseException:
+        _reset_gmsh()
+        raise
+    else:
         try:
             gmsh.clear()
         except Exception:
@@ -112,11 +141,19 @@ def gmsh_model(name: str = "part"):
 
 @dataclass
 class CalculiXConfig:
-    """Solver and meshing settings."""
+    """Solver and meshing settings.
 
-    E: float = 68.9e9
+    Units are **mm / tonne / s**, because that is what CadQuery exports and a
+    deck must agree with its geometry. The old SI defaults (68.9e9, 2700) were
+    a trap: paired with millimetre geometry they are wrong by nine orders of
+    magnitude in density, and the solve still converges. A part attached to the
+    solver supplies its own material through ``solver_hints``, so these
+    defaults only apply to a bare ``ParametricModel``.
+    """
+
+    E: float = 68900.0                # AL6061 [MPa]
     nu: float = 0.33
-    rho: float = 2700.0
+    rho: float = 2.7e-9               # AL6061 [tonne/mm^3]
     n_modes: int = 10
     mesh_size: float = 3.0            # target element size [mm]
     mesh_size_min: float = 0.8
@@ -134,6 +171,24 @@ class CalculiXConfig:
     # not predictable. Level 0 is the only reliably safe setting and is the
     # default. Raise it only for a one-off run you are watching.
     high_order_optimize: int = 0
+    # Smallest wall or bore in this design [model units], supplied per design by
+    # ``PartSpec.solver_hints``. 0 means "unknown".
+    #
+    # It does NOT cap the global element size. That was tried and measured: a
+    # global cap refined every design in both boxes, ten of them finer than the
+    # *fine* tier, and one coarse-tier mesh reached 159k nodes -- "coarse"
+    # became more expensive than "fine". Its only job now is to stop
+    # ``mesh_size_min`` from clamping the curvature refinement below.
+    min_feature: float = 0.0
+    # Elements around a full circle of local curvature. Gmsh then refines bores
+    # and tube walls -- the features an element actually has to wrap -- while
+    # leaving flat regions at ``mesh_size``. 0 disables it.
+    #
+    # Measured over 24 Sobol designs of each part at a 6 mm target, against a
+    # fixed element size: 48/48 designs meshed instead of 39/48, for 1.7x the
+    # nodes on the mount and 1.8x on the arm. Every design a fixed size lost
+    # failed the same way -- an element larger than a bore it had to wrap.
+    mesh_from_curvature: int = 12
     # Straight-sided quadratic tets: mid-side nodes at true edge midpoints
     # instead of projected onto the CAD surface.
     #
@@ -187,6 +242,9 @@ def mesh_step(
 
         n_vol = len(gmsh.model.getEntities(3))
 
+        gmsh.option.setNumber(
+            "Mesh.MeshSizeFromCurvature", float(cfg.mesh_from_curvature)
+        )
         gmsh.option.setNumber("Mesh.CharacteristicLengthMax", cfg.mesh_size)
         gmsh.option.setNumber("Mesh.CharacteristicLengthMin", cfg.mesh_size_min)
         gmsh.option.setNumber("Mesh.ElementOrder", cfg.order)
@@ -198,10 +256,26 @@ def mesh_step(
         )
 
         gmsh.model.mesh.generate(3)
-        gmsh.write(out_inp)
 
         tags, coords, _ = gmsh.model.mesh.getNodes()
         coords = np.asarray(coords, dtype=float).reshape(-1, 3)
+
+        # Gmsh can return successfully having meshed nothing. Catch it here,
+        # where the cause is still visible, rather than letting an empty node
+        # array travel into node selection and surface as a numpy error about a
+        # zero-size reduction.
+        n_solid = 0
+        for _, vol in gmsh.model.getEntities(3):
+            for block in gmsh.model.mesh.getElements(3, vol)[1]:
+                n_solid += len(block)
+        if coords.shape[0] == 0 or n_solid == 0:
+            raise RuntimeError(
+                f"Gmsh produced an empty mesh for {step_path} "
+                f"({coords.shape[0]} nodes, {n_solid} solid elements) at "
+                f"mesh_size={cfg.mesh_size:g}/{cfg.mesh_size_min:g}"
+            )
+
+        gmsh.write(out_inp)
 
         # Guard the failure above: after fragmenting, a conformal mesh must not
         # contain coincident duplicate nodes.  Duplicates here mean the solids
@@ -232,29 +306,52 @@ def count_volumes(step_path: str) -> int:
 def _select_fixed_nodes(coords: np.ndarray, tags: np.ndarray, cfg: CalculiXConfig):
     """Pick clamped nodes geometrically (the bolt-down face).
 
-    ``fix_tol`` is **absolute**, in model units, not a fraction of the bounding
-    box.  A relative tolerance looks safer but is not: it silently rescales with
-    the part, and on a design whose true mounting face is not the global lowest
-    surface it selects a handful of stray nodes instead of a face.  That failure
-    is invisible -- the solve succeeds and returns confident nonsense.
+    Selectors are ``"<axis>_plane"`` or ``"<axis>_min"`` / ``"<axis>_max"`` for
+    any of ``x``, ``y``, ``z``, plus ``"all"``. A part declares which it needs
+    through :meth:`PartSpec.solver_hints`, because which face is the mounting
+    face is a property of the geometry: a mount clamps ``z_plane`` at its base,
+    a cantilever arm clamps ``x_plane`` at its root.
 
-    ``"z_plane"`` clamps a *named* plane (``fix_plane``) instead of whatever
-    happens to be lowest, which is the safer choice in an optimisation loop
-    where design variables move geometry around.
+    Prefer ``"<axis>_plane"`` over ``"<axis>_min"``. A named plane stays correct
+    when a design variable moves geometry around; "whatever is lowest" does not,
+    and when it picks the wrong face the solve still succeeds and reports
+    confident nonsense.
+
+    ``fix_tol`` is **absolute**, in model units, not a fraction of the bounding
+    box. A relative tolerance looks safer but silently rescales with the part.
     """
-    z = coords[:, 2]
-    if cfg.fix_selector == "z_min":
-        sel = z <= z.min() + cfg.fix_tol
-    elif cfg.fix_selector == "z_plane":
-        sel = np.abs(z - cfg.fix_plane) <= cfg.fix_tol
-    elif cfg.fix_selector == "all":
+    axes = {"x": 0, "y": 1, "z": 2}
+    selector = cfg.fix_selector
+
+    if selector == "all":
         sel = np.ones(coords.shape[0], dtype=bool)
+        axis_name, v = "z", coords[:, 2]
     else:
-        raise ValueError(f"unknown fix_selector {cfg.fix_selector!r}")
+        try:
+            axis_name, kind = selector.split("_", 1)
+            v = coords[:, axes[axis_name]]
+        except (ValueError, KeyError):
+            raise ValueError(
+                f"unknown fix_selector {selector!r}; expected 'all' or "
+                "'<x|y|z>_<plane|min|max>'"
+            ) from None
+        if kind == "plane":
+            sel = np.abs(v - cfg.fix_plane) <= cfg.fix_tol
+        elif kind == "min":
+            sel = v <= v.min() + cfg.fix_tol
+        elif kind == "max":
+            sel = v >= v.max() - cfg.fix_tol
+        else:
+            raise ValueError(
+                f"unknown fix_selector {selector!r}; expected 'all' or "
+                "'<x|y|z>_<plane|min|max>'"
+            )
+
     if not sel.any():
         raise ValueError(
-            f"fix_selector {cfg.fix_selector!r} matched no nodes "
-            f"(z range {z.min():.4g}..{z.max():.4g}, tol {cfg.fix_tol:g})"
+            f"fix_selector {selector!r} matched no nodes ({axis_name} range "
+            f"{v.min():.4g}..{v.max():.4g}, plane {cfg.fix_plane:g}, "
+            f"tol {cfg.fix_tol:g})"
         )
     return tags[sel]
 
@@ -440,24 +537,58 @@ class CalculiXSolver(ModalSolver):
         self.workdir = workdir
         #: True when ``cad_model`` is a PartSpec that can supply BC hints.
         self.part = cad_model if hasattr(cad_model, "solver_hints") else None
+        #: Fields the caller pinned, decided once, at construction.
+        #:
+        #: "Differs from the default" cannot be re-derived later: the first
+        #: solve writes hint values into ``cfg``, and from then on every
+        #: design-dependent hint looks caller-set and stops updating. One solver
+        #: driving a DOE would give every design the *first* design's payload
+        #: radius and mesh cap, silently.
+        defaults = CalculiXConfig()
+        self._pinned = {
+            f
+            for f in vars(defaults)
+            if getattr(self.cfg, f, None) != getattr(defaults, f)
+        }
 
     def _apply_part_hints(self, params: dict[str, float]) -> None:
-        """Let the part set the config fields the caller left at their defaults.
+        """Refresh the config fields the part owns, for *this* design.
 
         Boundary conditions belong to the geometry, not the solver: a selector
         like "clamp the lowest face" silently picks the wrong face once a design
         variable moves things around, and the run succeeds anyway. Fields the
-        caller set explicitly are never overridden.
+        caller pinned at construction are never overridden.
         """
         if self.part is None:
             return
         hints = self.part.solver_hints(params)
         if not hints:
             return
-        defaults = CalculiXConfig()
         for key, value in hints.items():
-            if hasattr(self.cfg, key) and getattr(self.cfg, key) == getattr(defaults, key):
+            if hasattr(self.cfg, key) and key not in self._pinned:
                 setattr(self.cfg, key, value)
+
+    def _mesh_sizes(self) -> tuple[float, float]:
+        """Element sizes for this design: the target, and a floor that respects it.
+
+        A fixed element size is not portable across a design space. The coarse
+        tier asks for 6 mm elements; one sampled arm has a 5.5 mm bore through
+        an 11 mm tube, and a 6 mm element cannot wrap that annulus -- Gmsh
+        rejects the surface mesh as overlapping facets and the design is simply
+        lost from the DOE.
+
+        Curvature-driven refinement (``mesh_from_curvature``) handles that, but
+        only if ``mesh_size_min`` leaves it room: a minimum size larger than the
+        feature clamps the refinement away again and the design fails anyway.
+        So the part's smallest feature lowers the *floor*, never the target.
+
+        This only ever refines: a caller asking for a fine mesh still gets it.
+        """
+        h, hmin = self.cfg.mesh_size, self.cfg.mesh_size_min
+        feat = float(self.cfg.min_feature)
+        if feat > 0.0 and self.cfg.mesh_from_curvature > 0:
+            hmin = min(hmin, feat / 3.0)
+        return h, min(hmin, h)
 
     def solve(self, params: dict[str, float], n_modes: int = 10) -> ModalResult:
         self._apply_part_hints(params)
@@ -478,7 +609,9 @@ class CalculiXSolver(ModalSolver):
 
         try:
             self.cad.export_step(params, step)
-            coords, tags = mesh_step(step, mesh_inp, cfg)
+            h, hmin = self._mesh_sizes()
+            mesh_cfg = replace(cfg, mesh_size=h, mesh_size_min=hmin)
+            coords, tags = mesh_step(step, mesh_inp, mesh_cfg)
             fixed = _select_fixed_nodes(coords, tags, cfg)
 
             payload = None
@@ -525,6 +658,8 @@ class CalculiXSolver(ModalSolver):
                     "params": dict(params),
                     **({"part": self.part} if self.part is not None else {}),
                     "n_nodes": int(coords.shape[0]),
+                    "mesh_size": h,
+                    "mesh_size_min": hmin,
                     "step_file": step,
                     "workdir": tmp,
                 },

@@ -21,6 +21,12 @@ that does not, because the optimiser only ever uses the ranking.
 Run:  python examples/07_target_comparison.py [--quick]
 """
 
+import sys as _sys
+from pathlib import Path as _Path
+
+# Run straight from a checkout, with or without an editable install.
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
+
 import argparse
 import sys
 import time

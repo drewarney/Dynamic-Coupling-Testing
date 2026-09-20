@@ -4,6 +4,12 @@
 Run:  PYTHONPATH=src python3 examples/01_modal_mvp.py
 """
 
+import sys as _sys
+from pathlib import Path as _Path
+
+# Run straight from a checkout, with or without an editable install.
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
+
 import numpy as np
 
 from dynopt.dynamics import classify_modes, family_frequencies, modal_summary

@@ -31,7 +31,7 @@ import numpy as np
 
 from ..fea.reference import MATERIALS, FrameModel, Material, Section
 from ..dynamics.modal import ModeFamilySpec
-from .base import DesignSpace, DesignVariable, PartSpec
+from .base import DesignSpace, DesignVariable, PartSpec, material_hints
 
 #: Design space for the benchmark motor mount, all dimensions in metres.
 MOTOR_MOUNT_SPACE = DesignSpace(
@@ -312,6 +312,10 @@ class MotorMount(PartSpec):
         tips instead of the bolt-down faces, then solve and report nonsense.
         """
         geom = plate_geometry(params, self.motor_dia)
+        bore = leg_bore_radius(params["leg_dia"], params["leg_thk"])
+        thin = [float(params["plate_thk"]), float(params["leg_thk"])]
+        if bore > 0.0:
+            thin.append(2.0 * bore)
         return {
             "fix_selector": "z_plane",
             "fix_plane": 0.0,
@@ -319,6 +323,8 @@ class MotorMount(PartSpec):
             # mm / tonne / s, matching the mm geometry CadQuery exports
             "payload_mass": self.motor_mass * 1e-3,
             "payload_radius": max(geom["hole_radius"] * 1000.0 * 1.6, 8.0),
+            "min_feature": min(thin) * 1000.0,
+            **material_hints(self.material),
         }
 
     def build_cad(self, params: dict[str, float]):

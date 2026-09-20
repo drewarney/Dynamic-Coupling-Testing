@@ -18,7 +18,7 @@ import numpy as np
 
 from ..dynamics.modal import ModeFamilySpec
 from ..fea.reference import MATERIALS, FrameModel, Material, Section
-from .base import DesignSpace, DesignVariable, PartSpec
+from .base import DesignSpace, DesignVariable, PartSpec, material_hints
 
 #: Design space, SI units.
 CANTILEVER_ARM_SPACE = DesignSpace(
@@ -146,12 +146,21 @@ class CantileverArm(PartSpec):
 
     def solver_hints(self, params: dict[str, float]) -> dict:
         """Clamp the root collar face at x = 0, motor smeared over the tip boss."""
+        mm = 1000.0
+        dia = float(params["dia"]) * mm
+        bore = bore_radius(params["dia"], params["thk"]) * mm
+        boss_d = max(self.boss_dia * mm, dia + 4.0)
+        thin = [float(params["thk"]) * mm, 0.5 * (boss_d - dia)]
+        if bore > 0.0:
+            thin.append(2.0 * bore)
         return {
             "fix_selector": "x_plane",
             "fix_plane": 0.0,
             "fix_tol": 1e-3,
             "payload_mass": self.tip_mass * 1e-3,   # mm / tonne / s
-            "payload_radius": max(self.boss_dia * 1000.0 * 0.6, 6.0),
+            "payload_radius": max(self.boss_dia * mm * 0.6, 6.0),
+            "min_feature": min(thin),
+            **material_hints(self.material),
         }
 
 

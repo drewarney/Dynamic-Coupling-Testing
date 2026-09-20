@@ -7,6 +7,12 @@ a materially different (and optimistic) answer when damping is non-proportional.
 Run:  PYTHONPATH=src python3 examples/02_coupling_analysis.py
 """
 
+import sys as _sys
+from pathlib import Path as _Path
+
+# Run straight from a checkout, with or without an editable install.
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
+
 import numpy as np
 
 from dynopt.dynamics import (

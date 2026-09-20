@@ -69,6 +69,19 @@ class DesignSpace:
         return np.array([v.clip(xi) for v, xi in zip(self.variables, np.ravel(x))])
 
 
+def material_hints(material) -> dict[str, float]:
+    """``E``/``nu``/``rho`` in the mm-tonne-s units the CAD tiers work in.
+
+    :mod:`dynopt.fea.reference` stores materials in SI; CadQuery exports
+    millimetres, and a 3D deck written in SI against mm geometry is off by nine
+    orders of magnitude in density. Convert in exactly one place.
+    """
+    from ..fea.reference import MATERIALS
+
+    mat = MATERIALS[material] if isinstance(material, str) else material
+    return {"E": mat.E / 1e6, "nu": mat.nu, "rho": mat.rho * 1e-12}
+
+
 class ParametricModel(ABC):
     """Contract for a CAD backend: parameters in, solid + STEP file out."""
 
@@ -181,7 +194,24 @@ class PartSpec(ABC):
         a failure that solves happily and reports confident nonsense.
 
         Recognised keys: ``fix_selector``, ``fix_plane``, ``fix_tol``,
-        ``payload_mass``, ``payload_radius``.
+        ``payload_mass``, ``payload_radius``, ``min_feature``, ``E``, ``nu``,
+        ``rho``.
+
+        The material belongs here for the same reason the supports do: the beam
+        tier reads it from the part, so if the 3D tier does not, the two tiers
+        silently model different materials. A carbon arm solved as aluminium
+        reports frequencies 31% low, and nothing in the pipeline objects --
+        the discrepancy just looks like a fidelity effect and gets "corrected".
+        Use :func:`material_hints` rather than writing the conversion out.
+
+        ``min_feature`` is the smallest wall or bore in *this* design, in the
+        model units the CAD exports (mm here). The 3D backend caps its element
+        size by it, because a fixed element size is not portable across a design
+        space: too coarse for the thinnest design in the box and the mesher
+        rejects the part outright, losing it from the DOE.
+
+        Hints are re-read for every design, so anything derived from ``params``
+        must be computed here rather than cached.
         """
         return {}
 

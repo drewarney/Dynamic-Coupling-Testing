@@ -14,6 +14,12 @@ Requires the open-source stack::
 Run:  python examples/05_cross_solver_validation.py
 """
 
+import sys as _sys
+from pathlib import Path as _Path
+
+# Run straight from a checkout, with or without an editable install.
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
+
 import shutil
 import sys
 import warnings
