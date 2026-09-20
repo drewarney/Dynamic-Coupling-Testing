@@ -54,10 +54,53 @@ class FrequencySurrogate:
     log_target: bool = True
     nugget: float = 1e-8
     normalize_y: bool = True
+    #: Per-column transform: ``"log"``, ``"log1p"`` or ``"linear"``.
+    #:
+    #: Frequencies and mass are strictly positive and multiplicative, so ``log``
+    #: is right for them. Other targets are not: a resonance-risk score is zero
+    #: for exactly the designs you want, and a separation margin goes negative
+    #: inside an excitation band. Forcing those through ``log`` silently drops
+    #: the best samples, which looks like a modelling failure and is a filter.
+    #: Leave as ``None`` to apply ``log`` everywhere when ``log_target`` is set.
+    transforms: tuple[str, ...] | None = None
     models: list = field(default_factory=list)
     mass_model: object | None = None
     _X: np.ndarray | None = None
     _Y: np.ndarray | None = None
+
+    def _transform_for(self, j: int) -> str:
+        if self.transforms is not None and j < len(self.transforms):
+            return self.transforms[j]
+        return "log" if self.log_target else "linear"
+
+    @staticmethod
+    def _forward(y: np.ndarray, kind: str) -> np.ndarray:
+        if kind == "log":
+            return np.log(y)
+        if kind == "log1p":
+            return np.log1p(y)
+        return y
+
+    @staticmethod
+    def _domain_ok(y: np.ndarray, kind: str) -> np.ndarray:
+        """Which samples the transform can represent -- never a blanket y > 0."""
+        ok = np.isfinite(y)
+        if kind == "log":
+            return ok & (y > 0)
+        if kind == "log1p":
+            return ok & (y > -1.0)
+        return ok
+
+    @staticmethod
+    def _inverse(m: np.ndarray, s: np.ndarray, kind: str):
+        """Back-transform mean and std (delta method for the nonlinear cases)."""
+        if kind == "log":
+            mu = np.exp(m)
+            return mu, mu * s
+        if kind == "log1p":
+            mu = np.expm1(m)
+            return mu, (mu + 1.0) * s
+        return m, s
 
     def _kernel(self) -> object:
         d = len(self.space)
@@ -89,11 +132,12 @@ class FrequencySurrogate:
         self.models = []
         for j in range(min(self.n_modes, F.shape[1])):
             y = F[:, j]
-            ok = np.isfinite(y) & (y > 0)
+            kind = self._transform_for(j)
+            ok = self._domain_ok(y, kind)
             if ok.sum() < 3:
                 self.models.append(None)
                 continue
-            t = np.log(y[ok]) if self.log_target else y[ok]
+            t = self._forward(y[ok], kind)
             gp = GaussianProcessRegressor(
                 kernel=self._kernel(),
                 normalize_y=self.normalize_y,
@@ -114,10 +158,10 @@ class FrequencySurrogate:
         return self
 
     def predict(self, X: np.ndarray, return_std: bool = False):
-        """Predicted frequencies (Hz), shape ``(n, n_modes)``.
+        """Predicted targets, shape ``(n, n_columns)``, in their natural units.
 
-        The standard deviation is returned in **Hz**, converted out of log space
-        by the delta method: :math:`\\sigma_f \\approx f\\,\\sigma_{\\log f}`.
+        Standard deviations are back-transformed by the delta method, per
+        column, so they stay in the same units as the mean.
         """
         Xs = self._scale(X)
         n = Xs.shape[0]
@@ -131,11 +175,7 @@ class FrequencySurrogate:
                 m, s = gp.predict(Xs, return_std=True)
             else:
                 m, s = gp.predict(Xs), np.zeros(n)
-            if self.log_target:
-                mu[:, j] = np.exp(m)
-                sd[:, j] = mu[:, j] * s
-            else:
-                mu[:, j], sd[:, j] = m, s
+            mu[:, j], sd[:, j] = self._inverse(m, s, self._transform_for(j))
         return (mu, sd) if return_std else mu
 
     def predict_mass(self, X: np.ndarray) -> np.ndarray:
@@ -186,7 +226,8 @@ class FrequencySurrogate:
             mask = np.ones(n, dtype=bool)
             mask[i] = False
             sub = FrequencySurrogate(
-                self.space, n_modes=self.n_modes, log_target=self.log_target
+                self.space, n_modes=self.n_modes, log_target=self.log_target,
+                transforms=self.transforms,
             ).fit(self._X[mask], self._Y[mask])
             pred = sub.predict(self._X[i : i + 1])[0]
             truth = self._Y[i, : pred.size]

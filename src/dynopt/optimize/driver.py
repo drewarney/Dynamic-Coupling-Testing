@@ -36,6 +36,7 @@ from ..fea.base import ModalResult, ModalSolver
 from ..geometry.base import DesignSpace
 from ..surrogate.gp import FrequencySurrogate
 from .objectives import ResonanceObjective
+from .targets import ClusterTargets, FamilyTargets, TargetSet, make_target_set
 
 
 @dataclass
@@ -101,50 +102,53 @@ def _families_of(res: ModalResult) -> ModeFamilySpec | None:
     return part.mode_families if part is not None else None
 
 
+def resolve_targets(solver, targets, n_modes: int) -> TargetSet:
+    """Turn a name or TargetSet into a TargetSet, using the solver's part.
+
+    Resolved before sampling rather than on the first result, so a
+    misconfigured run fails immediately instead of after the DOE.
+    """
+    ts = make_target_set(targets, n_modes=n_modes, part=getattr(solver, "part", None))
+    ts.reset()
+    return ts
+
+
 def _sample_dataset(
     solver: ModalSolver,
     space: DesignSpace,
     X: np.ndarray,
     n_modes: int,
-    targets: str = "family",
+    targets: str | TargetSet = "family",
     verbose: bool = False,
     rtol: float = 0.02,
     min_purity: float = 0.35,
     families: ModeFamilySpec | None = None,
+    objective: ResonanceObjective | None = None,
 ) -> tuple[np.ndarray, np.ndarray, list[ModalResult], list[str]]:
     """Run FEA over a design matrix and build continuous regression targets.
 
-    ``targets`` selects how raw eigenvalues become fixed-length surrogate
-    targets -- the single most consequential choice in the whole pipeline:
+    ``targets`` is a :class:`dynopt.optimize.targets.TargetSet`, or one of the
+    names ``"family"``, ``"raw"``, ``"scalars"``, ``"cluster"``. See that module
+    for what each costs and requires; the choice is consequential enough that it
+    is worth measuring rather than assuming.
 
-    ``"family"`` (default, recommended)
-        Classify each mode by its rigid-body signature about the part's
-        classification origin and take the lowest frequency of each physical
-        family. Immune to eigenvalue reordering and to the arbitrary rotation
-        within degenerate eigenspaces, so the target stays a continuous function
-        of the design parameters across the *whole* design space. The families
-        are declared by the part (``PartSpec.mode_families``); pass ``families``
-        to override, or when the solver does not carry a part.
-
-    ``"cluster"``
-        Group near-degenerate modes and match clusters to a reference design by
-        subspace MAC.  Correct for a narrow design space or a continuation
-        sweep; degrades once the shapes drift far from the reference.
-
-    ``"raw"``
-        Frequency order, no tracking.  Fast, and wrong the moment two modes
-        cross -- provided for comparison, not for production.
+    The solved results come back alongside the targets, so switching target type
+    or changing the excitation bands is a re-extract, never a re-solve.
 
     Returns ``(F, mass, results, column_names)``.
     """
+    ts = (
+        FamilyTargets(families, min_purity=min_purity)
+        if families is not None
+        else resolve_targets(solver, targets, n_modes)
+    )
+    if isinstance(ts, ClusterTargets):
+        ts.rtol = rtol
+
     n = X.shape[0]
     mass = np.full(n, np.nan)
     results: list[ModalResult] = []
     rows: list[list[float] | None] = [None] * n
-    cols: list[str] | None = (
-        None if targets == "family" else [f"mode{i+1}" for i in range(n_modes)]
-    )
-    phi_ref, clusters_ref = None, None
 
     for i, x in enumerate(X):
         try:
@@ -157,47 +161,14 @@ def _sample_dataset(
 
         results.append(res)
         mass[i] = res.mass
-
-        if targets == "family":
-            spec = families or _families_of(res)
-            if spec is None:
-                raise ValueError(
-                    "targets='family' needs a ModeFamilySpec. Give the solver a "
-                    "PartSpec that declares mode_families, or pass families=..."
-                )
-            if cols is None:
-                cols = list(spec.columns)
-            fam = family_frequencies(res, _origin_of(res), spec, min_purity=min_purity)
-            rows[i] = [fam[k] for k in cols]
-
-        elif targets == "cluster" and res.modes is not None:
-            row = [np.nan] * n_modes
-            if phi_ref is None:
-                phi_ref = res.modes
-                clusters_ref = cluster_modes(res.frequencies, rtol=rtol)
-                fc = cluster_frequencies(res.frequencies, clusters_ref)
-                row[: min(fc.size, n_modes)] = fc[:n_modes]
-            else:
-                cnew = cluster_modes(res.frequencies, rtol=rtol)
-                idx = track_clusters(phi_ref, clusters_ref, res.modes, cnew)
-                fc = cluster_frequencies(res.frequencies, cnew)
-                for j, jj in enumerate(idx[:n_modes]):
-                    if jj >= 0:
-                        row[j] = fc[jj]
-            rows[i] = row
-
-        else:
-            row = [np.nan] * n_modes
-            row[: min(res.n_modes, n_modes)] = res.frequencies[:n_modes]
-            rows[i] = row
+        rows[i] = ts.extract(res, objective)
 
         if verbose and (i + 1) % 10 == 0:
             vals = np.asarray(rows[i], dtype=float)
             f1 = np.nanmin(vals) if np.isfinite(vals).any() else np.nan
-            print(f"  [{i+1}/{n}] f_min={f1:.1f} Hz  m={mass[i]*1000:.1f} g")
+            print(f"  [{i+1}/{n}] {ts.columns[0]}={f1:.1f}  m={mass[i]*1000:.1f} g")
 
-    if cols is None:  # every design failed before a spec could be resolved
-        cols = [f"mode{i+1}" for i in range(n_modes)]
+    cols = list(ts.columns)
     F = np.full((n, len(cols)), np.nan)
     for i, row in enumerate(rows):
         if row is not None:
@@ -258,23 +229,26 @@ def optimize_surrogate(
 ) -> OptimizationResult:
     """Train a GP on a one-shot DOE, then optimise the surrogate globally."""
     t0 = time.perf_counter()
+    ts = resolve_targets(solver, targets, n_modes)
     X = sobol_sample(space, n_train, seed=seed)
     if verbose:
-        print(f"[DOE] running {n_train} FEA solves ...")
+        print(f"[DOE] running {n_train} FEA solves ({ts}) ...")
     F, mass, _, cols = _sample_dataset(
-        solver, space, X, n_modes, targets=targets, verbose=verbose
+        solver, space, X, n_modes, targets=ts, verbose=verbose, objective=objective
     )
 
     ok = np.isfinite(mass)
-    sur = FrequencySurrogate(space, n_modes=F.shape[1]).fit(X[ok], F[ok], mass[ok])
+    sur = FrequencySurrogate(
+        space, n_modes=F.shape[1], transforms=ts.transforms
+    ).fit(X[ok], F[ok], mass[ok])
     if verbose:
         print("[GP] fitted. mean LOO error per mode will be reported separately.")
 
     def f(x):
         xx = np.atleast_2d(space.clip(x))
-        pred = sur.predict(xx)[0]
-        pred = pred[np.isfinite(pred)]
-        return objective(pred, float(sur.predict_mass(xx)[0]))
+        return ts.objective_from(
+            sur.predict(xx)[0], float(sur.predict_mass(xx)[0]), objective
+        )
 
     opt = differential_evolution(
         f, space.bounds, seed=seed, maxiter=200, tol=1e-8, polish=True
@@ -315,12 +289,13 @@ def optimize_adaptive(
     """
     t0 = time.perf_counter()
     rng = np.random.default_rng(seed)
+    ts = resolve_targets(solver, targets, n_modes)
 
     X = sobol_sample(space, n_init, seed=seed)
     if verbose:
-        print(f"[init] {n_init} FEA solves ...")
+        print(f"[init] {n_init} FEA solves ({ts}) ...")
     F, mass, _, cols = _sample_dataset(
-        solver, space, X, n_modes, targets=targets, verbose=verbose
+        solver, space, X, n_modes, targets=ts, verbose=verbose, objective=objective
     )
 
     history = []
@@ -328,13 +303,15 @@ def optimize_adaptive(
 
     for r in range(n_rounds):
         ok = np.isfinite(mass)
-        sur = FrequencySurrogate(space, n_modes=F.shape[1]).fit(X[ok], F[ok], mass[ok])
+        sur = FrequencySurrogate(
+        space, n_modes=F.shape[1], transforms=ts.transforms
+    ).fit(X[ok], F[ok], mass[ok])
 
         def f(x):
             xx = np.atleast_2d(space.clip(x))
-            pred = sur.predict(xx)[0]
-            pred = pred[np.isfinite(pred)]
-            return objective(pred, float(sur.predict_mass(xx)[0]))
+            return ts.objective_from(
+                sur.predict(xx)[0], float(sur.predict_mass(xx)[0]), objective
+            )
 
         opt = differential_evolution(
             f, space.bounds, seed=seed + r, maxiter=120, tol=1e-8, polish=True
@@ -350,7 +327,8 @@ def optimize_adaptive(
         batch = np.array(batch)
 
         Fb, mb, resb, _ = _sample_dataset(
-            solver, space, batch, n_modes, targets=targets, verbose=False
+            solver, space, batch, n_modes, targets=ts, verbose=False,
+            objective=objective,
         )
         X = np.vstack([X, batch])
         F = np.vstack([F, Fb])
@@ -382,7 +360,9 @@ def optimize_adaptive(
             )
 
     ok = np.isfinite(mass)
-    sur = FrequencySurrogate(space, n_modes=F.shape[1]).fit(X[ok], F[ok], mass[ok])
+    sur = FrequencySurrogate(
+        space, n_modes=F.shape[1], transforms=ts.transforms
+    ).fit(X[ok], F[ok], mass[ok])
 
     return OptimizationResult(
         x=best_x,
